@@ -156,4 +156,3 @@ if [ "$UPDATE_DNS" == "yes" ]; then
 fi
 
 log_message "Migration of domain $DOMAIN completed successfully."
-exit 0
