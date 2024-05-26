@@ -1,4 +1,5 @@
 #!/bin/bash
+clear
 
 # Function to prompt for input with default value
 prompt_input() {
