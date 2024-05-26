@@ -6,10 +6,11 @@ prompt_input() {
   echo "${input:-$2}"
 }
 
-# Log function to log messages using logger
+# Log function to log messages using logger and echo
 log_message() {
   local message="$1"
   logger -t "plesk-migrate" "$message"
+  echo "$message"
 }
 
 # Function to generate SSH key pair
@@ -73,20 +74,30 @@ update_dns() {
   ssh "-p $port" $user@$server_ip "plesk bin dns --update $domain -a $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; exit 1; }
 }
 
-# Check if the required arguments are provided
-if [ $# -ne 8 ]; then
-  echo "Usage: $0 <source_server> <source_port> <source_user> <target_server> <target_port> <target_user> <domain> <update_dns>"
-  exit 1
-fi
+# Check if arguments are provided
+if [ $# -eq 8 ]; then
+  SOURCE_SERVER=$1
+  SOURCE_PORT=$2
+  SOURCE_USER=$3
+  TARGET_SERVER=$4
+  TARGET_PORT=$5
+  TARGET_USER=$6
+  DOMAIN=$7
+  UPDATE_DNS=$8
+else
+  # Prompt user for necessary information
+  echo "Welcome to the EZ Plesk Migration Proxy Script"
+  echo "--------------------------------------------"
 
-SOURCE_SERVER=$1
-SOURCE_PORT=$2
-SOURCE_USER=$3
-TARGET_SERVER=$4
-TARGET_PORT=$5
-TARGET_USER=$6
-DOMAIN=$7
-UPDATE_DNS=$8
+  SOURCE_SERVER=$(prompt_input "Enter the source server IP")
+  SOURCE_PORT=$(prompt_input "Enter the SSH port for the source server" "22")
+  SOURCE_USER=$(prompt_input "Enter the username for the source server" "root")
+  TARGET_SERVER=$(prompt_input "Enter the target server IP")
+  TARGET_PORT=$(prompt_input "Enter the SSH port for the target server" "22")
+  TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
+  DOMAIN=$(prompt_input "Enter the domain to migrate")
+  UPDATE_DNS=$(prompt_input "Do you want to update DNS with the new server IP? (yes/no)" "yes")
+fi
 
 # Generate SSH key pair
 generate_ssh_keys || { log_message "Failed to generate SSH key pair"; exit 1; }
