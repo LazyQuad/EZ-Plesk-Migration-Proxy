@@ -23,8 +23,12 @@ log_directory() {
 
 # Function to generate SSH key pair
 generate_ssh_keys() {
-  log_message "Generating SSH key pair..."
-  ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" || { log_message "Failed to generate SSH key pair"; return 1; }
+  local server=$1
+  local user=$2
+  local key_path="$script_dir/keys/$server-$user"
+  
+  log_message "Generating SSH key pair for $user@$server..."
+  ssh-keygen -t rsa -b 4096 -f "$key_path" -N "" || { log_message "Failed to generate SSH key pair for $user@$server"; return 1; }
 }
 
 # Function to check if SSH key is already present on the server
@@ -32,11 +36,13 @@ check_ssh_key() {
   local user=$1
   local server_ip=$2
   local port=$3
+  local key_path="$script_dir/keys/$server_ip-$user"
+  
   ssh-keyscan -p $port $server_ip > /dev/null 2>&1
   if [ $? -eq 0 ]; then
-    ssh -p $port $user@$server_ip "grep -q \"$(cat ~/.ssh/id_rsa.pub)\" ~/.ssh/authorized_keys"
+    ssh -p $port $user@$server_ip "grep -q \"$(cat "$key_path.pub")\" ~/.ssh/authorized_keys"
     if [ $? -eq 0 ]; then
-      log_message "SSH key is already present on $server_ip"
+      log_message "SSH key is already present on $server_ip for $user"
       return 0
     fi
   fi
@@ -48,9 +54,11 @@ copy_ssh_key() {
   local user=$1
   local server_ip=$2
   local port=$3
+  local key_path="$script_dir/keys/$server_ip-$user"
+  
   if ! check_ssh_key $user $server_ip $port; then
-    log_message "Copying public SSH key to $server_ip..."
-    ssh-copy-id "-p $port" $user@$server_ip || { log_message "Failed to copy SSH key to $server_ip"; return 1; }
+    log_message "Copying public SSH key to $server_ip for $user..."
+    ssh-copy-id "-p $port" -i "$key_path.pub" $user@$server_ip || { log_message "Failed to copy SSH key to $server_ip for $user"; return 1; }
   fi
 }
 
@@ -87,7 +95,7 @@ restore_backup() {
   local domain=$3
   local port=$4
   log_message "Restoring backup of domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain $domain" || { log_message "Failed to restore backup of domain $domain on the target server"; return 1; }
+  ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server"; return 1; }
 }
 
 # Function to update DNS entries on target server
@@ -97,8 +105,46 @@ update_dns() {
   local domain=$3
   local port=$4
   log_message "Updating DNS entries for domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin dns --update $domain -a $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
+  ssh "-p $port" $user@$server_ip "plesk bin dns --add $domain -a $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
 }
+
+# Function to display the authentication method menu and get user input
+get_auth_method() {
+  echo "Authentication Methods:"
+  echo "1. Password-based authentication"
+  echo "2. SSH key-based authentication"
+  read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
+
+  case $auth_choice in
+    1)
+      echo "You have chosen password-based authentication."
+      echo "Please note that password-based authentication is less secure compared to SSH key-based authentication."
+      echo "Risks:"
+      echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
+      echo "- Passwords are susceptible to brute-force and dictionary attacks."
+      echo "- Passwords can be accidentally disclosed or shared, leading to unauthorized access."
+      use_password_auth=true
+      ;;
+    2)
+      echo "You have chosen SSH key-based authentication."
+      echo "SSH key-based authentication provides a more secure method of authentication."
+      echo "Risks:"
+      echo "- Private keys must be kept secure and protected from unauthorized access."
+      echo "- If a private key is compromised, it can be used for unauthorized access to the corresponding servers."
+      use_password_auth=false
+      ;;
+    *)
+      echo "Invalid choice. Defaulting to password-based authentication."
+      use_password_auth=true
+      ;;
+  esac
+}
+
+# Get the script's directory
+script_dir="$(dirname "$(readlink -f "$0")")"
+
+# Create the keys directory if it doesn't exist
+mkdir -p "$script_dir/keys"
 
 # Initialize migration status variable
 migration_status=0
@@ -110,19 +156,35 @@ echo "--------------------------------------------"
 SOURCE_SERVER=$(prompt_input "Enter the source server IP")
 SOURCE_PORT=$(prompt_input "Enter the SSH port for the source server" "22")
 SOURCE_USER=$(prompt_input "Enter the username for the source server" "root")
+
 TARGET_SERVER=$(prompt_input "Enter the target server IP")
 TARGET_PORT=$(prompt_input "Enter the SSH port for the target server" "22")
 TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
+
 UPDATE_DNS=$(prompt_input "Do you want to update DNS with the new server IP? (yes/no)" "yes")
 
-# Generate SSH key pair
-generate_ssh_keys || migration_status=1
+# Prompt user to choose the authentication method
+get_auth_method
 
-# Copy public SSH key to source server
-copy_ssh_key $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT || migration_status=1
+if [ "$use_password_auth" = true ]; then
+  # Prompt for passwords
+  read -s -p "Enter the password for the source server: " SOURCE_PASSWORD
+  echo
+  read -s -p "Enter the password for the target server: " TARGET_PASSWORD
+  echo
+else
+  # Generate SSH key pair for source server
+  generate_ssh_keys $SOURCE_SERVER $SOURCE_USER || migration_status=1
 
-# Copy public SSH key to target server
-copy_ssh_key $TARGET_USER $TARGET_SERVER $TARGET_PORT || migration_status=1
+  # Generate SSH key pair for target server
+  generate_ssh_keys $TARGET_SERVER $TARGET_USER || migration_status=1
+
+  # Copy public SSH key to source server
+  copy_ssh_key $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT || migration_status=1
+
+  # Copy public SSH key to target server
+  copy_ssh_key $TARGET_USER $TARGET_SERVER $TARGET_PORT || migration_status=1
+fi
 
 # Loop to transfer multiple domains
 while true; do
@@ -149,25 +211,43 @@ while true; do
   fi
 
   # Backup domain on source server
-  log_message "Backing up domain $DOMAIN on the source server..."
-  ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file /var/lib/psa/dumps/$DOMAIN-backup.tar" || migration_status=1
+  BACKUP_FILE="/var/lib/psa/dumps/$DOMAIN-backup.tar"
+  log_message "Backing up domain $DOMAIN on the source server to $BACKUP_FILE..."
+  if [ "$use_password_auth" = true ]; then
+    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || migration_status=1
+  else
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || migration_status=1
+  fi
 
   # Verify backup integrity on source server
-  ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "tar -tvf /var/lib/psa/dumps/$DOMAIN-backup.tar" > /dev/null 2>&1
+  if [ "$use_password_auth" = true ]; then
+    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+  else
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+  fi
   if [ $? -ne 0 ]; then
-    log_message "Backup verification failed on the source server. Skipping migration of domain $DOMAIN."
+    log_message "Backup verification failed on the source server for $BACKUP_FILE. Skipping migration of domain $DOMAIN."
     migration_status=1
     continue
   fi
 
   # Transfer backup from source server to target server
-  log_message "Transferring backup of domain $DOMAIN from source server to target server..."
-  scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:/var/lib/psa/dumps/$DOMAIN-backup.tar $TARGET_USER@$TARGET_SERVER:/tmp/ || migration_status=1
+  TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
+  log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
+  if [ "$use_password_auth" = true ]; then
+    scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || migration_status=1
+  else
+    scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || migration_status=1
+  fi
 
   # Verify backup integrity on target server
-  ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "tar -tvf /tmp/$DOMAIN-backup.tar" > /dev/null 2>&1
+  if [ "$use_password_auth" = true ]; then
+    ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+  else
+    ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+  fi
   if [ $? -ne 0 ]; then
-    log_message "Backup verification failed on the target server. Skipping migration of domain $DOMAIN."
+    log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Skipping migration of domain $DOMAIN."
     migration_status=1
     continue
   fi
@@ -188,4 +268,21 @@ if [ $migration_status -eq 0 ]; then
   log_message "All domain migrations completed successfully."
 else
   log_message "One or more domain migrations encountered errors. Please check the logs for more details."
+fi
+
+# Prompt user to erase SSH keys
+if [ "$use_password_auth" = false ]; then
+  read -p "Do you want to erase the generated SSH keys? (yes/no) [yes]: " ERASE_KEYS
+  ERASE_KEYS=${ERASE_KEYS:-yes}
+
+  if [ "$ERASE_KEYS" == "yes" ]; then
+    # Erase SSH key files
+    log_message "Erasing SSH key files..."
+    rm -f "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER.pub"
+    rm -f "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$script_dir/keys/$TARGET_SERVER-$TARGET_USER.pub"
+
+    log_message "SSH keys have been erased."
+  else
+    log_message "SSH keys have not been erased."
+  fi
 fi
