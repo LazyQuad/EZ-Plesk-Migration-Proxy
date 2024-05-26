@@ -110,7 +110,7 @@ update_dns() {
   local domain=$3
   local port=$4
   log_message "Updating DNS entries for domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin dns --add $domain -ip $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
+  ssh "-p $port" $user@$server_ip "plesk bin dns --update $domain -ip $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
 }
 
 # Function to check Plesk version on server
@@ -309,17 +309,4 @@ while true; do
     if [ "$use_password_auth" = true ]; then
       ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
     else
-      ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
-    fi
-
-    log_message "Backup files for domain $DOMAIN have been cleaned up."
-  else
-    log_message "Backup files for domain $DOMAIN have not been cleaned up."
-  fi
-done
-
-# Display overall migration status
-if [ $migration_status -eq 0 ]; then
-  log_message "All domain migrations completed successfully."
-else
-  log_message "One or more domain migrations encountered errors. Please check
+      ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "
