@@ -13,6 +13,13 @@ log_message() {
   echo "$message"
 }
 
+# Function to log current working directory
+log_directory() {
+  local message="$1"
+  local directory=$(pwd)
+  log_message "$message: $directory"
+}
+
 # Function to generate SSH key pair
 generate_ssh_keys() {
   log_message "Generating SSH key pair..."
@@ -143,6 +150,7 @@ while true; do
   # Backup domain on source server
   log_message "Backing up domain $DOMAIN on the source server..."
   ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file /var/lib/psa/dumps/$DOMAIN-backup.tar" || migration_status=1
+  log_directory "Backup created on source server"
 
   # Verify backup integrity on source server
   ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "tar -tvf /var/lib/psa/dumps/$DOMAIN-backup.tar" > /dev/null 2>&1
@@ -155,6 +163,7 @@ while true; do
   # Transfer backup from source server to target server
   log_message "Transferring backup of domain $DOMAIN from source server to target server..."
   scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:/var/lib/psa/dumps/$DOMAIN-backup.tar /tmp/ || migration_status=1
+  log_directory "Backup transferred to target server"
 
   # Verify backup integrity on target server
   ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "tar -tvf /tmp/$DOMAIN-backup.tar" > /dev/null 2>&1
@@ -166,6 +175,7 @@ while true; do
 
   # Restore backup on target server
   restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || migration_status=1
+  log_directory "Backup restored on target server"
 
   # Modify DNS entries on target server if needed
   if [ "$UPDATE_DNS" == "yes" ]; then
