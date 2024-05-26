@@ -155,7 +155,7 @@ get_auth_method() {
 }
 
 # Get the script's directory
-script_dir="$(dirname "$(readlink -f "$0")")"
+script_dir="$( dirname "$(readlink -f -- "$0")" )
 
 # Create the keys directory if it doesn't exist
 mkdir -p "$script_dir/keys"
