@@ -110,7 +110,7 @@ update_dns() {
   local domain=$3
   local port=$4
   log_message "Updating DNS entries for domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin dns --add $domain -a $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
+  ssh "-p $port" $user@$server_ip "plesk bin dns --add $domain -ip $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
 }
 
 # Function to check Plesk version on server
@@ -155,7 +155,7 @@ get_auth_method() {
 }
 
 # Get the script's directory
-script_dir="$( dirname "$(readlink -f -- "$0")" )"
+script_dir="$(dirname "$(readlink -f -- "$0")")"
 
 # Create the keys directory if it doesn't exist
 mkdir -p "$script_dir/keys"
@@ -290,28 +290,36 @@ while true; do
   fi
 
   log_message "Migration of domain $DOMAIN completed."
+
+  # Prompt user to clean up backup files
+  read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
+  CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
+
+  if [ "$CLEANUP_BACKUPS" == "yes" ]; then
+    # Clean up backup files on source server
+    log_message "Cleaning up backup files for domain $DOMAIN on the source server..."
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+    else
+      ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+    fi
+
+    # Clean up backup files on target server
+    log_message "Cleaning up backup files for domain $DOMAIN on the target server..."
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
+    else
+      ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
+    fi
+
+    log_message "Backup files for domain $DOMAIN have been cleaned up."
+  else
+    log_message "Backup files for domain $DOMAIN have not been cleaned up."
+  fi
 done
 
 # Display overall migration status
 if [ $migration_status -eq 0 ]; then
   log_message "All domain migrations completed successfully."
 else
-  log_message "One or more domain migrations encountered errors. Please check the logs for more details."
-fi
-
-# Prompt user to erase SSH keys
-if [ "$use_password_auth" = false ]; then
-  read -p "Do you want to erase the generated SSH keys? (yes/no) [yes]: " ERASE_KEYS
-  ERASE_KEYS=${ERASE_KEYS:-yes}
-
-  if [ "$ERASE_KEYS" == "yes" ]; then
-    # Erase SSH key files
-    log_message "Erasing SSH key files..."
-    rm -f "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER.pub"
-    rm -f "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$script_dir/keys/$TARGET_SERVER-$TARGET_USER.pub"
-
-    log_message "SSH keys have been erased."
-  else
-    log_message "SSH keys have not been erased."
-  fi
-fi
+  log_message "One or more domain migrations encountered errors. Please check
