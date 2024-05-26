@@ -11,7 +11,7 @@ prompt_input() {
 log_message() {
   local message="$1"
   logger -t "plesk-migrate" "$message"
-  echo "$message"
+  echo -e "\n$message\n"
 }
 
 # Function to log current working directory
@@ -94,8 +94,13 @@ restore_backup() {
   local server_ip=$2
   local domain=$3
   local port=$4
+  local ignore_sign=$5
   log_message "Restoring backup of domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server"; return 1; }
+  if [ "$ignore_sign" == "yes" ]; then
+    ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain -ignore-sign" || { log_message "Failed to restore backup of domain $domain on the target server"; return 1; }
+  else
+    ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server"; return 1; }
+  fi
 }
 
 # Function to update DNS entries on target server
@@ -108,6 +113,15 @@ update_dns() {
   ssh "-p $port" $user@$server_ip "plesk bin dns --add $domain -a $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
 }
 
+# Function to check Plesk version on server
+check_plesk_version() {
+  local user=$1
+  local server_ip=$2
+  local port=$3
+  log_message "Checking Plesk version on $server_ip..."
+  ssh "-p $port" $user@$server_ip "plesk version" || { log_message "Failed to check Plesk version on $server_ip"; return 1; }
+}
+
 # Function to display the authentication method menu and get user input
 get_auth_method() {
   echo "Authentication Methods:"
@@ -117,7 +131,7 @@ get_auth_method() {
 
   case $auth_choice in
     1)
-      echo "You have chosen password-based authentication."
+      echo -e "\nYou have chosen password-based authentication."
       echo "Please note that password-based authentication is less secure compared to SSH key-based authentication."
       echo "Risks:"
       echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
@@ -126,7 +140,7 @@ get_auth_method() {
       use_password_auth=true
       ;;
     2)
-      echo "You have chosen SSH key-based authentication."
+      echo -e "\nYou have chosen SSH key-based authentication."
       echo "SSH key-based authentication provides a more secure method of authentication."
       echo "Risks:"
       echo "- Private keys must be kept secure and protected from unauthorized access."
@@ -134,7 +148,7 @@ get_auth_method() {
       use_password_auth=false
       ;;
     *)
-      echo "Invalid choice. Defaulting to password-based authentication."
+      echo -e "\nInvalid choice. Defaulting to password-based authentication."
       use_password_auth=true
       ;;
   esac
@@ -162,6 +176,21 @@ TARGET_PORT=$(prompt_input "Enter the SSH port for the target server" "22")
 TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
 
 UPDATE_DNS=$(prompt_input "Do you want to update DNS with the new server IP? (yes/no)" "yes")
+
+# Check Plesk version on source and target servers
+SOURCE_PLESK_VERSION=$(check_plesk_version $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT)
+TARGET_PLESK_VERSION=$(check_plesk_version $TARGET_USER $TARGET_SERVER $TARGET_PORT)
+
+if [ "$SOURCE_PLESK_VERSION" != "$TARGET_PLESK_VERSION" ]; then
+  log_message "Warning: Plesk versions on the source and target servers do not match."
+  log_message "Source server Plesk version: $SOURCE_PLESK_VERSION"
+  log_message "Target server Plesk version: $TARGET_PLESK_VERSION"
+  log_message "Restoring backups across different Plesk versions may lead to compatibility issues."
+  read -p "Do you want to continue with the migration using the -ignore-sign option? (yes/no) [no]: " IGNORE_SIGN
+  IGNORE_SIGN=${IGNORE_SIGN:-no}
+else
+  IGNORE_SIGN="no"
+fi
 
 # Prompt user to choose the authentication method
 get_auth_method
@@ -196,10 +225,10 @@ while true; do
 
   # Check if domain exists on target server
   if check_domain_exists $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT; then
-    echo "Domain $DOMAIN already exists on the target server."
+    echo -e "\nDomain $DOMAIN already exists on the target server."
     BACKUP_DOMAIN=$(prompt_input "Do you want to backup the existing domain? (yes/no)" "no")
     if [ "$BACKUP_DOMAIN" == "yes" ]; then
-      backup_existing_domain $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || migration_status=1
+      backup_existing_domain $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || { migration_status=1; continue; }
     fi
   fi
 
@@ -214,9 +243,9 @@ while true; do
   BACKUP_FILE="/var/lib/psa/dumps/$DOMAIN-backup.tar"
   log_message "Backing up domain $DOMAIN on the source server to $BACKUP_FILE..."
   if [ "$use_password_auth" = true ]; then
-    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || migration_status=1
+    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { migration_status=1; continue; }
   else
-    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || migration_status=1
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { migration_status=1; continue; }
   fi
 
   # Verify backup integrity on source server
@@ -235,9 +264,9 @@ while true; do
   TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
   log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
   if [ "$use_password_auth" = true ]; then
-    scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || migration_status=1
+    scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || { migration_status=1; continue; }
   else
-    scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || migration_status=1
+    scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || { migration_status=1; continue; }
   fi
 
   # Verify backup integrity on target server
@@ -253,11 +282,11 @@ while true; do
   fi
 
   # Restore backup on target server
-  restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || migration_status=1
+  restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT $IGNORE_SIGN || { migration_status=1; continue; }
 
   # Modify DNS entries on target server if needed
   if [ "$UPDATE_DNS" == "yes" ]; then
-    update_dns $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || migration_status=1
+    update_dns $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || { migration_status=1; continue; }
   fi
 
   log_message "Migration of domain $DOMAIN completed."
