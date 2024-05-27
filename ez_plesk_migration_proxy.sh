@@ -295,11 +295,75 @@ while true; do
     scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || { log_message "Failed to transfer backup of domain $DOMAIN to the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
   fi
 
-  # Verify backup integrity on target server
+# Verify backup integrity on target server
   if [ "$use_password_auth" = true ]; then
     ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
   else
     ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
   fi
   if [ $? -ne 0 ]; then
-    log_message "
+    log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Skipping migration of domain $DOMAIN." "$MIGRATION_LOG"
+    migration_status=1
+    continue
+  fi
+
+  # Restore backup on target server
+  restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT $IGNORE_SIGN || { log_message "Failed to restore backup of domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
+
+  # Modify DNS entries on target server if needed
+  if [ "$UPDATE_DNS" == "yes" ]; then
+    update_dns $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || { log_message "Failed to update DNS entries for domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
+  fi
+
+  log_message "Migration of domain $DOMAIN completed successfully." "$MIGRATION_LOG"
+
+  # Prompt user to clean up backup files
+  read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
+  CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
+
+  if [ "$CLEANUP_BACKUPS" == "yes" ]; then
+    # Clean up backup files on source server
+    log_message "Cleaning up backup files for domain $DOMAIN on the source server..." "$MIGRATION_LOG"
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+    else
+      ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+    fi
+
+    # Clean up backup files on target server
+    log_message "Cleaning up backup files for domain $DOMAIN on the target server..." "$MIGRATION_LOG"
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
+    else
+      ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
+    fi
+
+    log_message "Backup files for domain $DOMAIN have been cleaned up." "$MIGRATION_LOG"
+  else
+    log_message "Backup files for domain $DOMAIN have not been cleaned up." "$MIGRATION_LOG"
+  fi
+done
+
+# Display overall migration status
+if [ $migration_status -eq 0 ]; then
+  log_message "All domain migrations completed successfully." "$SCRIPT_LOG"
+else
+  log_message "One or more domain migrations encountered errors. Please check the logs for more details." "$SCRIPT_LOG"
+fi
+
+# Prompt user to erase SSH keys
+if [ "$use_password_auth" = false ]; then
+  read -p "Do you want to erase the generated SSH keys? (yes/no) [yes]: " ERASE_KEYS
+  ERASE_KEYS=${ERASE_KEYS:-yes}
+
+  if [ "$ERASE_KEYS" == "yes" ]; then
+    # Erase SSH key files
+    log_message "Erasing SSH key files..." "$SCRIPT_LOG"
+    rm -f "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER.pub"
+    rm -f "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$script_dir/keys/$TARGET_SERVER-$TARGET_USER.pub"
+
+    log_message "SSH keys have been erased." "$SCRIPT_LOG"
+  else
+    log_message "SSH keys have not been erased." "$SCRIPT_LOG"
+  fi
+fi
