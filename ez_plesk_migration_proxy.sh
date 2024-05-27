@@ -180,8 +180,8 @@ mkdir -p "$script_dir/keys"
 mkdir -p "$script_dir/logs"
 
 # Generate unique log file names
-SCRIPT_LOG="$script_dir/logs/migration_script_$(date +'%Y%m%d_%H%M%S').log"
-MIGRATION_LOG="$script_dir/logs/migration_domain_$(date +'%Y%m%d_%H%M%S').log"
+SCRIPT_LOG="$script_dir/logs/connection_log_$(date +'%Y%m%d_%H%M%S').log"
+MIGRATION_LOG="$script_dir/logs/migration_$DOMAIN_$(date +'%Y%m%d_%H%M%S').log"
 
 # Initialize migration status variable
 migration_status=0
