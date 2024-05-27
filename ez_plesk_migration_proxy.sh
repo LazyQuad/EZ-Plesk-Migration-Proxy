@@ -11,6 +11,7 @@ prompt_input() {
 log_message() {
   local message="$1"
   local log_file="$2"
+  echo -e "\n$message\n"
   echo "$(date +'%Y-%m-%d %H:%M:%S') - $message" >> "$log_file"
 }
 
