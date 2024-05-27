@@ -106,11 +106,26 @@ restore_backup() {
 # Function to update DNS entries on target server
 update_dns() {
   local user=$1
-  local server_ip=$2
+  local server_input=$2
   local domain=$3
   local port=$4
   log_message "Updating DNS entries for domain $domain on the target server..."
-  ssh "-p $port" $user@$server_ip "plesk bin dns --update $domain -ip $server_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
+  
+  # Check if the input is a valid IP address
+  if [[ $server_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    target_ip=$server_input
+  else
+    # Extract the IP address of the target server using dig
+    target_ip=$(dig +short $server_input)
+    
+    # Validate the IP address
+    if [[ ! $target_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      log_message "Failed to retrieve a valid IP address for $server_input. Skipping DNS update for domain $domain."
+      return 1
+    fi
+  fi
+  
+  ssh "-p $port" $user@$server_input "plesk bin dns --update $domain -ip $target_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server"; return 1; }
 }
 
 # Function to check Plesk version on server
