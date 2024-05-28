@@ -39,10 +39,12 @@ check_ssh_key() {
   local port=$3
   local key_path="$script_dir/keys/$server_ip-$user"
   
-  ssh-keyscan -p $port $server_ip > /dev/null 2>&1
-  if [ $? -eq 0 ]; then
-    ssh -p $port $user@$server_ip "grep -q \"$(cat "$key_path.pub")\" ~/.ssh/authorized_keys"
-    if [ $? -eq 0 ]; then
+  ssh-keyscan -p "$port" "$server_ip" > /dev/null 2>&1
+  local exit_status=$?
+  if [ $exit_status -eq 0 ]; then
+    ssh -p "$port" "$user@$server_ip" "grep -q \"$(cat "$key_path.pub")\" ~/.ssh/authorized_keys"
+    exit_status=$?
+    if [ $exit_status -eq 0 ]; then
       log_message "SSH key is already present on $server_ip for $user" "$SCRIPT_LOG"
       return 0
     fi
@@ -57,9 +59,9 @@ copy_ssh_key() {
   local port=$3
   local key_path="$script_dir/keys/$server_ip-$user"
   
-  if ! check_ssh_key $user $server_ip $port; then
+  if ! check_ssh_key "$user" "$server_ip" "$port"; then
     log_message "Copying public SSH key to $server_ip for $user..." "$SCRIPT_LOG"
-    ssh-copy-id "-p $port" -i "$key_path.pub" $user@$server_ip || { log_message "Failed to copy SSH key to $server_ip for $user" "$SCRIPT_LOG"; return 1; }
+    ssh-copy-id "-p $port" -i "$key_path.pub" "$user@$server_ip" || { log_message "Failed to copy SSH key to $server_ip for $user" "$SCRIPT_LOG"; return 1; }
   fi
 }
 
@@ -70,8 +72,9 @@ check_domain_exists() {
   local domain=$3
   local port=$4
   log_message "Checking if domain $domain already exists on the target server..." "$MIGRATION_LOG"
-  ssh "-p $port" $user@$server_ip "plesk bin domain --list | grep -q $domain"
-  if [ $? -eq 0 ]; then
+  ssh "-p $port" "$user@$server_ip" "plesk bin domain --list | grep -q $domain"
+  local exit_status=$?
+  if [ $exit_status -eq 0 ]; then
     log_message "Domain $domain already exists on the target server" "$MIGRATION_LOG"
     return 0
   else
@@ -86,7 +89,7 @@ backup_existing_domain() {
   local domain=$3
   local port=$4
   log_message "Backing up existing domain $domain on the target server..." "$MIGRATION_LOG"
-  ssh "-p $port" $user@$server_ip "plesk bin pleskbackup --domains-name $domain --output-file /var/lib/psa/dumps/$domain-backup-$(date +%Y%m%d%H%M%S).tar" || { log_message "Failed to backup domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
+  ssh "-p $port" "$user@$server_ip" "plesk bin pleskbackup --domains-name $domain --output-file /var/lib/psa/dumps/$domain-backup-$(date +%Y%m%d%H%M%S).tar" || { log_message "Failed to backup domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
 }
 
 # Function to restore backup on target server
@@ -98,9 +101,9 @@ restore_backup() {
   local ignore_sign=$5
   log_message "Restoring backup of domain $domain on the target server..." "$MIGRATION_LOG"
   if [ "$ignore_sign" == "yes" ]; then
-    ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain -ignore-sign" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
+    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain -ignore-sign" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
   else
-    ssh "-p $port" $user@$server_ip "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
+    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
   fi
 }
 
@@ -117,8 +120,7 @@ extract_ip() {
     target_ip=$server_input
   else
     # Extract the IP address of the target server using dig
-    target_ip=$(dig +short $server_input)
-    return target_ip
+    target_ip=$(dig +short "$server_input")
     # Validate the IP address
     if [[ ! $target_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       log_message "Failed to retrieve a valid IP address for $server_input. Skipping DNS update for domain $domain." "$MIGRATION_LOG"
@@ -126,6 +128,7 @@ extract_ip() {
     fi
   fi
   
+  echo "$target_ip"
 }
 
 # Function to check Plesk version on server
@@ -134,7 +137,7 @@ check_plesk_version() {
   local server_ip=$2
   local port=$3
   log_message "Checking Plesk version on $server_ip..." "$SCRIPT_LOG"
-  ssh "-p $port" $user@$server_ip "plesk version" || { log_message "Failed to check Plesk version on $server_ip" "$SCRIPT_LOG"; return 1; }
+  ssh "-p $port" "$user@$server_ip" "plesk version" || { log_message "Failed to check Plesk version on $server_ip" "$SCRIPT_LOG"; return 1; }
 }
 
 # Function to display the authentication method menu and get user input
@@ -173,7 +176,7 @@ get_auth_method() {
 }
 
 # Get the script's directory
-script_dir="$(dirname "$(readlink -f -- "$0")")"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Create the keys directory if it doesn't exist
 mkdir -p "$script_dir/keys"
@@ -202,8 +205,8 @@ TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
 
 
 # Check Plesk version on source and target servers
-SOURCE_PLESK_VERSION=$(check_plesk_version $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT)
-TARGET_PLESK_VERSION=$(check_plesk_version $TARGET_USER $TARGET_SERVER $TARGET_PORT)
+SOURCE_PLESK_VERSION=$(check_plesk_version "$SOURCE_USER" "$SOURCE_SERVER" "$SOURCE_PORT")
+TARGET_PLESK_VERSION=$(check_plesk_version "$TARGET_USER" "$TARGET_SERVER" "$TARGET_PORT")
 
 if [ "$SOURCE_PLESK_VERSION" != "$TARGET_PLESK_VERSION" ]; then
   log_message "Warning: Plesk versions on the source and target servers do not match." "$SCRIPT_LOG"
@@ -227,16 +230,16 @@ if [ "$use_password_auth" = true ]; then
   echo
 else
   # Generate SSH key pair for source server
-  generate_ssh_keys $SOURCE_SERVER $SOURCE_USER || migration_status=1
+  generate_ssh_keys "$SOURCE_SERVER" "$SOURCE_USER" || migration_status=1
 
   # Generate SSH key pair for target server
-  generate_ssh_keys $TARGET_SERVER $TARGET_USER || migration_status=1
+  generate_ssh_keys "$TARGET_SERVER" "$TARGET_USER" || migration_status=1
 
   # Copy public SSH key to source server
-  copy_ssh_key $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT || migration_status=1
+  copy_ssh_key "$SOURCE_USER" "$SOURCE_SERVER" "$SOURCE_PORT" || migration_status=1
 
   # Copy public SSH key to target server
-  copy_ssh_key $TARGET_USER $TARGET_SERVER $TARGET_PORT || migration_status=1
+  copy_ssh_key "$TARGET_USER" "$TARGET_SERVER" "$TARGET_PORT" || migration_status=1
 fi
 
 # Loop to transfer multiple domains
@@ -251,11 +254,11 @@ while true; do
   MIGRATION_LOG="$script_dir/logs/migration_$DOMAIN_$(date +'%Y%m%d_%H%M%S').log"
 
   # Check if domain exists on target server
-  if check_domain_exists $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT; then
+  if check_domain_exists "$TARGET_USER" "$TARGET_SERVER" "$DOMAIN" "$TARGET_PORT"; then
     echo -e "\nDomain $DOMAIN already exists on the target server."
     BACKUP_DOMAIN=$(prompt_input "Do you want to backup the existing domain? (yes/no)" "no")
     if [ "$BACKUP_DOMAIN" == "yes" ]; then
-      backup_existing_domain $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || { migration_status=1; continue; }
+      backup_existing_domain "$TARGET_USER" "$TARGET_SERVER" "$DOMAIN" "$TARGET_PORT" || { migration_status=1; continue; }
     fi
   fi
 
@@ -270,18 +273,19 @@ while true; do
   BACKUP_FILE="/var/lib/psa/dumps/$DOMAIN-backup.tar"
   log_message "Backing up domain $DOMAIN on the source server to $BACKUP_FILE..." "$MIGRATION_LOG"
   if [ "$use_password_auth" = true ]; then
-    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
+    ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
   else
-    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
   fi
 
   # Verify backup integrity on source server
   if [ "$use_password_auth" = true ]; then
-    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+    ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
   else
-    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
   fi
-  if [ $? -ne 0 ]; then
+  local exit_status=$?
+  if [ $exit_status -ne 0 ]; then
     log_message "Backup verification failed on the source server for $BACKUP_FILE. Skipping migration of domain $DOMAIN." "$MIGRATION_LOG"
     migration_status=1
     continue
@@ -291,53 +295,54 @@ while true; do
   TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
   log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..." "$MIGRATION_LOG"
   if [ "$use_password_auth" = true ]; then
-    scp "-P $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || { log_message "Failed to transfer backup of domain $DOMAIN to the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
+    scp "-P $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
   else
-    scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE $TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE || { log_message "Failed to transfer backup of domain $DOMAIN to the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
+    scp "-P $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
   fi
 
 # Verify backup integrity on target server
   if [ "$use_password_auth" = true ]; then
-    ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+    ssh "-p $TARGET_PORT" "$TARGET_USER@$TARGET_SERVER" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
   else
-    ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+    ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
   fi
-  if [ $? -ne 0 ]; then
+  local exit_status=$?
+  if [ $exit_status -ne 0 ]; then
     log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Skipping migration of domain $DOMAIN." "$MIGRATION_LOG"
     migration_status=1
     continue
   fi
 
- # Restore backup on target server
-restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT $IGNORE_SIGN || { log_message "Failed to restore backup of domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
+  # Restore backup on target server
+  restore_backup "$TARGET_USER" "$TARGET_SERVER" "$DOMAIN" "$TARGET_PORT" "$IGNORE_SIGN" || { log_message "Failed to restore backup of domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
 
-log_message "Migration of domain $DOMAIN completed successfully." "$MIGRATION_LOG"
+  log_message "Migration of domain $DOMAIN completed successfully." "$MIGRATION_LOG"
 
-# Prompt user to clean up backup files
-read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
-CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
+  # Prompt user to clean up backup files
+  read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
+  CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
 
-if [ "$CLEANUP_BACKUPS" == "yes" ]; then
-  # Clean up backup files on source server
-  log_message "Cleaning up backup files for domain $DOMAIN on the source server..." "$MIGRATION_LOG"
-  if [ "$use_password_auth" = true ]; then
-    ssh "-p $SOURCE_PORT" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+  if [ "$CLEANUP_BACKUPS" == "yes" ]; then
+    # Clean up backup files on source server
+    log_message "Cleaning up backup files for domain $DOMAIN on the source server..." "$MIGRATION_LOG"
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "rm -f $BACKUP_FILE"
+    else
+      ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "rm -f $BACKUP_FILE"
+    fi
+
+    # Clean up backup files on target server
+    log_message "Cleaning up backup files for domain $DOMAIN on the target server..." "$MIGRATION_LOG"
+    if [ "$use_password_auth" = true ]; then
+      ssh "-p $TARGET_PORT" "$TARGET_USER@$TARGET_SERVER" "rm -f $TARGET_BACKUP_FILE"
+    else
+      ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER" "rm -f $TARGET_BACKUP_FILE"
+    fi
+
+    log_message "Backup files for domain $DOMAIN have been cleaned up." "$MIGRATION_LOG"
   else
-    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" $SOURCE_USER@$SOURCE_SERVER "rm -f $BACKUP_FILE"
+    log_message "Backup files for domain $DOMAIN have not been cleaned up." "$MIGRATION_LOG"
   fi
-
-  # Clean up backup files on target server
-  log_message "Cleaning up backup files for domain $DOMAIN on the target server..." "$MIGRATION_LOG"
-  if [ "$use_password_auth" = true ]; then
-    ssh "-p $TARGET_PORT" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
-  else
-    ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" $TARGET_USER@$TARGET_SERVER "rm -f $TARGET_BACKUP_FILE"
-  fi
-
-  log_message "Backup files for domain $DOMAIN have been cleaned up." "$MIGRATION_LOG"
-else
-  log_message "Backup files for domain $DOMAIN have not been cleaned up." "$MIGRATION_LOG"
-fi
 done
 
 # Display overall migration status
