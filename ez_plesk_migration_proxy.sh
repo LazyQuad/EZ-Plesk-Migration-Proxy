@@ -150,13 +150,13 @@ get_auth_method() {
   echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
   echo "- Passwords are susceptible to brute-force and dictionary attacks."
   echo "- Passwords can be accidentally disclosed or shared, leading to unauthorized access."
-  echo "\n"
+  echo 
   echo "2. More Secure - SSH key-based authentication"
   echo "SSH key-based authentication provides a more secure method of authentication."
   echo "Risks:"
   echo "- Private keys must be kept secure and protected from unauthorized access."
   echo "- If a private key is compromised, it can be used for unauthorized access to the corresponding servers."
-  echo "\n"
+  echo 
   read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
 
   case $auth_choice in
@@ -218,6 +218,8 @@ if [ "$SOURCE_PLESK_VERSION" != "$TARGET_PLESK_VERSION" ]; then
 else
   IGNORE_SIGN="no"
 fi
+
+clear
 
 # Prompt user to choose the authentication method
 get_auth_method
