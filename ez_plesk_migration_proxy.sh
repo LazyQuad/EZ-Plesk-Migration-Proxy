@@ -126,7 +126,6 @@ update_dns() {
     fi
   fi
   
-  ssh "-p $port" $user@$server_input "plesk bin dns --update $domain -ip $target_ip" || { log_message "Failed to update DNS entries for domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
 }
 
 # Function to check Plesk version on server
@@ -141,26 +140,29 @@ check_plesk_version() {
 # Function to display the authentication method menu and get user input
 get_auth_method() {
   echo "Authentication Methods:"
-  echo "1. Password-based authentication"
-  echo "2. SSH key-based authentication"
+  echo "-----------------------"
+  echo "1. Less Secure - Password-based authentication"
+  echo "Please note that password-based authentication is less secure compared to SSH key-based authentication."
+  echo "Risks:"
+  echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
+  echo "- Passwords are susceptible to brute-force and dictionary attacks."
+  echo "- Passwords can be accidentally disclosed or shared, leading to unauthorized access."
+  echo "\n"
+  echo "2. More Secure - SSH key-based authentication"
+  echo "SSH key-based authentication provides a more secure method of authentication."
+  echo "Risks:"
+  echo "- Private keys must be kept secure and protected from unauthorized access."
+  echo "- If a private key is compromised, it can be used for unauthorized access to the corresponding servers."
+  echo "\n"
   read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
 
   case $auth_choice in
     1)
       echo -e "\nYou have chosen password-based authentication."
-      echo "Please note that password-based authentication is less secure compared to SSH key-based authentication."
-      echo "Risks:"
-      echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
-      echo "- Passwords are susceptible to brute-force and dictionary attacks."
-      echo "- Passwords can be accidentally disclosed or shared, leading to unauthorized access."
       use_password_auth=true
       ;;
     2)
       echo -e "\nYou have chosen SSH key-based authentication."
-      echo "SSH key-based authentication provides a more secure method of authentication."
-      echo "Risks:"
-      echo "- Private keys must be kept secure and protected from unauthorized access."
-      echo "- If a private key is compromised, it can be used for unauthorized access to the corresponding servers."
       use_password_auth=false
       ;;
     *)
@@ -220,9 +222,9 @@ get_auth_method
 
 if [ "$use_password_auth" = true ]; then
   # Prompt for passwords
-  read -s -p "Enter the password for the source server: " SOURCE_PASSWORD
+  read -s -p "Enter the password for the source server[$SOURCE_SERVER]: /n" SOURCE_PASSWORD
   echo
-  read -s -p "Enter the password for the target server: " TARGET_PASSWORD
+  read -s -p "Enter the password for the target serve[$TARGET_SERVER]: /n" TARGET_PASSWORD
   echo
 else
   # Generate SSH key pair for source server
