@@ -146,6 +146,7 @@ get_auth_method() {
   echo "-----------------------"
   echo "1. Less Secure - Password-based authentication"
   echo "Please note that password-based authentication is less secure compared to SSH key-based authentication."
+  echo 
   echo "Risks:"
   echo "- Passwords can be intercepted if transmitted over an unencrypted or improperly secured connection."
   echo "- Passwords are susceptible to brute-force and dictionary attacks."
@@ -153,23 +154,25 @@ get_auth_method() {
   echo 
   echo "2. More Secure - SSH key-based authentication"
   echo "SSH key-based authentication provides a more secure method of authentication."
+  echo 
   echo "Risks:"
   echo "- Private keys must be kept secure and protected from unauthorized access."
   echo "- If a private key is compromised, it can be used for unauthorized access to the corresponding servers."
+  echo 
   echo 
   read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
 
   case $auth_choice in
     1)
-      echo -e "\nYou have chosen password-based authentication."
+      echo -e "\nYou have chosen password-based authentication.\n\n"
       use_password_auth=true
       ;;
     2)
-      echo -e "\nYou have chosen SSH key-based authentication."
+      echo -e "\nYou have chosen SSH key-based authentication.\n\n"
       use_password_auth=false
       ;;
     *)
-      echo -e "\nInvalid choice. Defaulting to password-based authentication."
+      echo -e "\nInvalid choice. Defaulting to password-based authentication.\n\n"
       use_password_auth=true
       ;;
   esac
@@ -226,9 +229,9 @@ get_auth_method
 
 if [ "$use_password_auth" = true ]; then
   # Prompt for passwords
-  read -s -p "Enter the password for the source server[$SOURCE_SERVER]: /n" SOURCE_PASSWORD
+  read -s -p "Enter the password for the source server[$SOURCE_SERVER]: " SOURCE_PASSWORD
   echo
-  read -s -p "Enter the password for the target serve[$TARGET_SERVER]: /n" TARGET_PASSWORD
+  read -s -p "Enter the password for the target serve[$TARGET_SERVER]: " TARGET_PASSWORD
   echo
 else
   # Generate SSH key pair for source server
@@ -265,7 +268,7 @@ while true; do
   fi
 
   # Confirmation prompt before proceeding
-  read -p "Are you sure you want to proceed with the migration of domain $DOMAIN? (yes/no): " CONFIRM
+  read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $TARGET_SERVER to $SOURCE_SERVER? (yes/no): " CONFIRM
   if [ "$CONFIRM" != "yes" ]; then
     log_message "Migration of domain $DOMAIN aborted by the user." "$MIGRATION_LOG"
     continue
