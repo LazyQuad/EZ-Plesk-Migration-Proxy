@@ -189,7 +189,7 @@ mkdir -p "$script_dir/logs"
 
 # Generate unique log file names
 SCRIPT_LOG="$script_dir/logs/connection_log_$(date +'%Y%m%d_%H%M%S').log"
-MIGRATION_LOG="$script_dir/logs/migration_$DOMAIN_$(date +'%Y%m%d_%H%M%S').log"
+MIGRATION_LOG="$script_dir/logs/${DOMAIN}_$(date +'%Y-%m-%d_%H-%M-%S')_migration.log"
 
 # Initialize migration status variable
 migration_status=0
@@ -288,8 +288,8 @@ while true; do
     ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
   else
     ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+    local exit_status=$?
   fi
-  local exit_status=$?
   if [ $exit_status -ne 0 ]; then
     log_message "Backup verification failed on the source server for $BACKUP_FILE. Skipping migration of domain $DOMAIN." "$MIGRATION_LOG"
     migration_status=1
@@ -308,10 +308,11 @@ while true; do
 # Verify backup integrity on target server
   if [ "$use_password_auth" = true ]; then
     ssh "-p $TARGET_PORT" "$TARGET_USER@$TARGET_SERVER" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+   local exit_status=$?
   else
     ssh "-p $TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
-  fi
-  local exit_status=$?
+   local exit_status=$?
+ fi
   if [ $exit_status -ne 0 ]; then
     log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Skipping migration of domain $DOMAIN." "$MIGRATION_LOG"
     migration_status=1
