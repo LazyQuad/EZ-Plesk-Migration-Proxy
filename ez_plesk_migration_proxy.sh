@@ -268,7 +268,7 @@ while true; do
   fi
 
   # Confirmation prompt before proceeding
-  read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $TARGET_SERVER to $SOURCE_SERVER? (yes/no): " CONFIRM
+  read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER to $TARGET_SERVER? (yes/no): " CONFIRM
   if [ "$CONFIRM" != "yes" ]; then
     log_message "Migration of domain $DOMAIN aborted by the user." "$MIGRATION_LOG"
     continue
