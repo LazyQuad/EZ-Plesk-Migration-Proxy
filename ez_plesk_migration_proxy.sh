@@ -104,13 +104,13 @@ restore_backup() {
   fi
 }
 
-# Function to update DNS entries on target server
-update_dns() {
+# Extract the IP address of the target server using dig
+extract_ip() {
   local user=$1
   local server_input=$2
   local domain=$3
   local port=$4
-  log_message "Updating DNS entries for domain $domain on the target server..." "$MIGRATION_LOG"
+  log_message "Extracting IP for domain $domain on the target server..." "$MIGRATION_LOG"
   
   # Check if the input is a valid IP address
   if [[ $server_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -118,7 +118,7 @@ update_dns() {
   else
     # Extract the IP address of the target server using dig
     target_ip=$(dig +short $server_input)
-    
+    return target_ip
     # Validate the IP address
     if [[ ! $target_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       log_message "Failed to retrieve a valid IP address for $server_input. Skipping DNS update for domain $domain." "$MIGRATION_LOG"
@@ -200,7 +200,6 @@ TARGET_SERVER=$(prompt_input "Enter the target server IP")
 TARGET_PORT=$(prompt_input "Enter the SSH port for the target server" "22")
 TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
 
-UPDATE_DNS=$(prompt_input "Do you want to update DNS with the new server IP? (yes/no)" "yes")
 
 # Check Plesk version on source and target servers
 SOURCE_PLESK_VERSION=$(check_plesk_version $SOURCE_USER $SOURCE_SERVER $SOURCE_PORT)
@@ -311,11 +310,6 @@ while true; do
 
  # Restore backup on target server
 restore_backup $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT $IGNORE_SIGN || { log_message "Failed to restore backup of domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
-
-# Modify DNS entries on target server if needed
-if [ "$UPDATE_DNS" == "yes" ]; then
-  update_dns $TARGET_USER $TARGET_SERVER $DOMAIN $TARGET_PORT || { log_message "Failed to update DNS entries for domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
-fi
 
 log_message "Migration of domain $DOMAIN completed successfully." "$MIGRATION_LOG"
 
