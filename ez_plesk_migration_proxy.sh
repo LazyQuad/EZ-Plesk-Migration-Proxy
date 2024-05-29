@@ -1,6 +1,48 @@
 #!/bin/bash
 clear
 
+#########################################################
+#                                                       #
+#                  GLOBAL VARIABLES                     #
+#                                                       #
+#########################################################
+
+# Get the script's directory
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Create the keys directory if it doesn't exist
+mkdir -p "$script_dir/keys"
+
+# Create the logs directory if it doesn't exist
+mkdir -p "$script_dir/backups" || { log_message "Failed to create the backups directory" "$MIGRATION_LOG"; return 1; }
+
+# Create the logs directory if it doesn't exist
+mkdir -p "$script_dir/logs"
+
+# Generate unique log file names
+SCRIPT_LOG="$script_dir/logs/connection_log_$(date +'%Y%m%d_%H%M%S').log"
+MIGRATION_LOG="$script_dir/logs/${DOMAIN}_$(date +'%Y-%m-%d_%H-%M-%S')_migration.log"
+
+# Remote Backup Directory
+BACKUP_DIR="/tmp/"
+
+# Generate unique Remote backup file names
+BACKUP_FILENAME="${DOMAIN}_BACKUP.tar"
+
+# Remote Backup File Location
+REMOTE_BACKUP_LOCATION="${BACKUP_DIR}${BACKUP_FILENAME}"
+
+# Initialize migration status variable
+migration_status=0
+
+
+
+#########################################################
+#                                                       #
+#                    FUNCTIONS                          #
+#                                                       #
+#########################################################
+
 # Function to prompt for input with default value
 prompt_input() {
   read -p "$1 [$2]: " input
@@ -14,6 +56,22 @@ log_message() {
   echo -e "\n$message\n"
   echo "$(date +'%Y-%m-%d %H:%M:%S') - $message" >> "$log_file"
 }
+
+# Function to initialize directories and return their paths
+initialize_directory() {
+  local subdir=$1
+  local dir_path
+  
+  # Create the directory if it doesn't exist
+  dir_path="$script_dir/$subdir"
+  if mkdir -p "$dir_path"; then
+    echo "$dir_path"
+  else
+    echo "Failed to create $subdir directory"
+    exit 1
+  fi
+}
+
 
 # Function to log current working directory
 log_directory() {
@@ -45,7 +103,8 @@ check_ssh_key() {
     ssh -p "$port" "$user@$server_ip" "grep -q \"$(cat "$key_path.pub")\" ~/.ssh/authorized_keys"
     exit_status=$?
     if [ $exit_status -eq 0 ]; then
-      log_message "SSH key is already present on $server_ip for $user" "$SCRIPT_LOG"
+      log_message "SSH key is already present on $server_ip for $
+      user" "$SCRIPT_LOG"
       return 0
     fi
   fi
@@ -92,18 +151,35 @@ backup_existing_domain() {
   ssh "-p $port" "$user@$server_ip" "plesk bin pleskbackup --domains-name $domain --output-file /var/lib/psa/dumps/$domain-backup-$(date +%Y%m%d%H%M%S).tar" || { log_message "Failed to backup domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
 }
 
+  # Function to backup domain on source server
+backup_source() {
+  local user=$1
+  local server_ip=$2
+  local domain=$3
+  local port=$4
+  BACKUP_FILE="/var/lib/psa/dumps/$DOMAIN-backup.tar"
+  log_message "Backing up domain $DOMAIN on the source server to $BACKUP_FILE..." "$MIGRATION_LOG"
+  if [ "$use_password_auth" = true ]; then
+    ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; return 1; }
+  else
+    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; return 1; }
+  fi
+}
+
 # Function to restore backup on target server
 restore_backup() {
   local user=$1
   local server_ip=$2
   local domain=$3
   local port=$4
-  local ignore_sign=$5
+  local target_backup_file=$5
+
   log_message "Restoring backup of domain $domain on the target server..." "$MIGRATION_LOG"
+
   if [ "$ignore_sign" == "yes" ]; then
-    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain -ignore-sign" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
+    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore $target_backup_file -level domains -domain-name $domain -ignore-sign" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
   else
-    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore /tmp/$domain-backup.tar -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
+    ssh "-p $port" "$user@$server_ip" "plesk bin pleskrestore --restore $target_backup_file -level domains -domain-name $domain" || { log_message "Failed to restore backup of domain $domain on the target server" "$MIGRATION_LOG"; return 1; }
   fi
 }
 
@@ -138,6 +214,51 @@ check_plesk_version() {
   local port=$3
   log_message "Checking Plesk version on $server_ip..." "$SCRIPT_LOG"
   ssh "-p $port" "$user@$server_ip" "plesk version" || { log_message "Failed to check Plesk version on $server_ip" "$SCRIPT_LOG"; return 1; }
+}
+
+# Function to backup source domain's DNS records to a flat file
+backup_source_dns() {
+  local user=$1
+  local server_ip=$2
+  local domain=$3
+  local port=$4
+  local timestamp=$(date +'%Y%m%d_%H%M%S')
+  local dns_backup_file="$script_dir/backups/${domain}_dns_bak_${timestamp}.txt"
+  
+  log_message "Backing up DNS records for domain $domain from the source server to $dns_backup_file..." "$MIGRATION_LOG"
+  
+  if [ "$use_password_auth" = true ]; then
+    ssh "-p $port" "$user@$server_ip" "plesk bin dns --info $domain" > "$dns_backup_file"
+  else
+    ssh "-p $port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "plesk bin dns --info $domain" > "$dns_backup_file"
+  fi
+  
+  if [ $? -eq 0 ]; then
+    log_message "DNS records for domain $domain backed up successfully to $dns_backup_file." "$MIGRATION_LOG"
+  else
+    log_message "Failed to backup DNS records for domain $domain from the source server." "$MIGRATION_LOG"
+    return 1
+  fi
+}
+
+# Function to prompt user to download backups
+download_backups() {
+  read -p "Do you want to download the domain and DNS backups to the current server? (yes/no) [no]: " DOWNLOAD_BACKUPS
+  DOWNLOAD_BACKUPS=${DOWNLOAD_BACKUPS:-no}
+  
+  if [ "$DOWNLOAD_BACKUPS" == "yes" ]; then
+    local backup_dir="$script_dir/backups"
+    local download_dir="/tmp/plesk_migration_backups_$(date +'%Y%m%d_%H%M%S')"
+    
+    log_message "Downloading backups to $download_dir..." "$MIGRATION_LOG"
+    mkdir -p "$download_dir"
+    cp -r "$backup_dir"/* "$download_dir"
+    
+    log_message "Backups downloaded to $download_dir." "$MIGRATION_LOG"
+    echo "Backups have been downloaded to $download_dir"
+  else
+    log_message "Backups not downloaded." "$MIGRATION_LOG"
+  fi
 }
 
 # Function to display the authentication method menu and get user input
@@ -178,21 +299,12 @@ get_auth_method() {
   esac
 }
 
-# Get the script's directory
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#########################################################
+#                                                       #
+#                     MAIN SCRIPT                       #
+#                                                       #
+#########################################################
 
-# Create the keys directory if it doesn't exist
-mkdir -p "$script_dir/keys"
-
-# Create the logs directory if it doesn't exist
-mkdir -p "$script_dir/logs"
-
-# Generate unique log file names
-SCRIPT_LOG="$script_dir/logs/connection_log_$(date +'%Y%m%d_%H%M%S').log"
-MIGRATION_LOG="$script_dir/logs/${DOMAIN}_$(date +'%Y-%m-%d_%H-%M-%S')_migration.log"
-
-# Initialize migration status variable
-migration_status=0
 
 # Prompt user for source and target server details
 echo "Welcome to the EZ Plesk Migration Proxy Script"
@@ -275,13 +387,7 @@ while true; do
   fi
 
   # Backup domain on source server
-  BACKUP_FILE="/var/lib/psa/dumps/$DOMAIN-backup.tar"
-  log_message "Backing up domain $DOMAIN on the source server to $BACKUP_FILE..." "$MIGRATION_LOG"
-  if [ "$use_password_auth" = true ]; then
-    ssh "-p $SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
-  else
-    ssh "-p $SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER" "plesk bin pleskbackup --domains-name $DOMAIN --output-file $BACKUP_FILE" || { log_message "Failed to backup domain $DOMAIN on the source server" "$MIGRATION_LOG"; migration_status=1; continue; }
-  fi
+  backup_source || { migration_status=1; continue; }
 
   # Verify backup integrity on source server
   if [ "$use_password_auth" = true ]; then
@@ -323,6 +429,9 @@ while true; do
   restore_backup "$TARGET_USER" "$TARGET_SERVER" "$DOMAIN" "$TARGET_PORT" "$IGNORE_SIGN" || { log_message "Failed to restore backup of domain $DOMAIN on the target server" "$MIGRATION_LOG"; migration_status=1; continue; }
 
   log_message "Migration of domain $DOMAIN completed successfully." "$MIGRATION_LOG"
+
+  # Prompt user to download backups
+  download_backups
 
   # Prompt user to clean up backup files
   read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
