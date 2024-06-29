@@ -138,7 +138,6 @@ backup_source() {
         return 1
     fi
     
-    log_message "Backup command output: $backup_output"
     echo "$backup_file"  # Return the backup file path
 }
 
@@ -365,14 +364,8 @@ elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
             continue
         fi
 
+        #BACKUP ON SOURCE
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
-
-        # Check available space and list contents of dumps directory
-        if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
-        else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
-        fi
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
@@ -382,39 +375,33 @@ elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
             continue
         fi
 
-        log_message "Debug: BACKUP_FILE=$BACKUP_FILE"
-        log_message "Debug: SOURCE_PORT=$SOURCE_PORT"
-        log_message "Debug: SOURCE_USER=$SOURCE_USER"
-        log_message "Debug: SOURCE_SERVER_IP=$SOURCE_SERVER_IP"
-
         # Check if backup file was created
         log_message "Checking if backup file was created..."
         if [ "$use_password_auth" = true ]; then
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l \"$BACKUP_FILE\" 2>&1")
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f \"$BACKUP_FILE\""
         else
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l \"$BACKUP_FILE\" 2>&1")
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f \"$BACKUP_FILE\""
         fi
 
-        if [[ $FILE_CHECK == *"No such file or directory"* ]]; then
-            log_message "Backup file was not created: $FILE_CHECK"
+        if [ $? -ne 0 ]; then
+            log_message "Backup file was not created: $BACKUP_FILE"
             log_message "Skipping migration of domain $DOMAIN due to backup creation failure."
             migration_status=1
             continue
         fi
 
-        log_message "Backup file details: $FILE_CHECK"
+        log_message "Backup file created successfully: $BACKUP_FILE"
 
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf \"$BACKUP_FILE\"" 2>&1)
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tf \"$BACKUP_FILE\"" > /dev/null 2>&1
         else
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf \"$BACKUP_FILE\"" 2>&1)
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tf \"$BACKUP_FILE\"" > /dev/null 2>&1
         fi
-        exit_status=$?
-        if [ $exit_status -ne 0 ]; then
-            log_message "Backup verification failed on the source server for $BACKUP_FILE. Error code: $exit_status"
-            log_message "Error output: $VERIFY_OUTPUT"
+        
+        if [ $? -ne 0 ]; then
+            log_message "Backup verification failed on the source server for $BACKUP_FILE."
             read -p "Do you want to continue with the migration despite the verification failure? (yes/no): " CONTINUE_ANYWAY
             if [ "$CONTINUE_ANYWAY" != "yes" ]; then
                 log_message "Skipping migration of domain $DOMAIN due to verification failure."
