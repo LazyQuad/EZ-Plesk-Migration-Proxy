@@ -6,7 +6,7 @@ set +e  # Don't exit on error
 set +o pipefail # Don't exit if any command in a pipeline fails
 
 # Script version
-VERSION="1.2.1"
+VERSION="1.2.2"
 
 # Get the script's directory
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -125,10 +125,17 @@ backup_source() {
     local backup_file="/var/lib/psa/dumps/${domain}-backup.tar"
     log_message "Backing up domain $domain on the source server to $backup_file..."
     
+    local backup_command="plesk bin pleskbackup --domains-name $domain --output-file $backup_file"
     if [ "$use_password_auth" = true ]; then
-        ssh -p "$port" "$user@$server_ip" "plesk bin pleskbackup --domains-name $domain --output-file $backup_file" || { log_message "Failed to backup domain $domain on the source server"; return 1; }
+        ssh -p "$port" "$user@$server_ip" "$backup_command" 2>&1 || { 
+            log_message "Failed to backup domain $domain on the source server. Error: $?"
+            return 1
+        }
     else
-        ssh -p "$port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "plesk bin pleskbackup --domains-name $domain --output-file $backup_file" || { log_message "Failed to backup domain $domain on the source server"; return 1; }
+        ssh -p "$port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "$backup_command" 2>&1 || { 
+            log_message "Failed to backup domain $domain on the source server. Error: $?"
+            return 1
+        }
     fi
     
     echo "$backup_file"  # Return the backup file path
@@ -202,6 +209,7 @@ get_auth_method() {
     echo "2. More Secure - SSH key-based authentication"
     echo 
     read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
+    echo  # Add an extra newline here
 
     case $auth_choice in
         1)
@@ -217,6 +225,7 @@ get_auth_method() {
             use_password_auth=true
             ;;
     esac
+    echo  # Add an extra newline here
 }
 
 # Main script execution
@@ -288,10 +297,19 @@ main() {
 
     if [ "$use_password_auth" = true ]; then
         # Prompt for passwords
-        read -s -p "Enter the password for the source server[$SOURCE_SERVER_IP]: " SOURCE_PASSWORD
+        if [ -n "$SOURCE_SERVER_DOMAIN" ]; then
+            read -s -p "Enter the password for the source server [$SOURCE_SERVER_DOMAIN]: " SOURCE_PASSWORD
+        else
+            read -s -p "Enter the password for the source server [$SOURCE_SERVER_IP]: " SOURCE_PASSWORD
+        fi
         echo
-        read -s -p "Enter the password for the target server[$TARGET_SERVER_IP]: " TARGET_PASSWORD
+        if [ -n "$TARGET_SERVER_DOMAIN" ]; then
+            read -s -p "Enter the password for the target server [$TARGET_SERVER_DOMAIN]: " TARGET_PASSWORD
+        else
+            read -s -p "Enter the password for the target server [$TARGET_SERVER_IP]: " TARGET_PASSWORD
+        fi
         echo
+        echo  # Add an extra newline here
     else
         # Generate SSH key pair for source server
         generate_ssh_keys "$SOURCE_SERVER_IP" "$SOURCE_USER" || migration_status=1
@@ -308,12 +326,15 @@ main() {
 
     # Loop to transfer multiple domains
     while true; do
-        # Prompt user for domain to migrate
+        echo  # Add an extra newline for spacing
         DOMAIN=$(prompt_input "Enter the domain to migrate (or press Enter to finish)")
         if [ -z "$DOMAIN" ]; then
             break
         fi
+        echo  # Add an extra newline for spacing
 
+        log_message "Starting migration process for domain: $DOMAIN"
+        
         # Update the migration log file name for the current domain
         MIGRATION_LOG="$script_dir/logs/migration_${DOMAIN}_$(date +'%Y%m%d_%H%M%S').log"
 
@@ -326,17 +347,25 @@ main() {
             fi
         fi
 
-        # Confirmation prompt before proceeding
+        echo  # Add an extra newline for spacing
         read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
+        echo  # Add an extra newline for spacing
+        
         if [ "$CONFIRM" != "yes" ]; then
             log_message "Migration of domain $DOMAIN aborted by the user."
             continue
         fi
 
         # Backup domain on source server
-        BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir") || { migration_status=1; continue; }
+        BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
+        if [ $? -ne 0 ]; then
+            log_message "Failed to create backup for domain $DOMAIN. Skipping migration."
+            migration_status=1
+            continue
+        fi
 
         # Verify backup integrity on source server
+        log_message "Verifying backup integrity on source server..."
         if [ "$use_password_auth" = true ]; then
             ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
         else
@@ -344,12 +373,14 @@ main() {
         fi
         local exit_status=$?
         if [ $exit_status -ne 0 ]; then
-            log_message "Backup verification failed on the source server for $BACKUP_FILE. Skipping migration of domain $DOMAIN."
+            log_message "Backup verification failed on the source server for $BACKUP_FILE. Error code: $exit_status"
+            log_message "Skipping migration of domain $DOMAIN."
             migration_status=1
             continue
         fi
+        log_message "Backup verification successful."
 
-# Transfer backup from source server to target server
+        # Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
         log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
         if [ "$use_password_auth" = true ]; then
@@ -359,6 +390,7 @@ main() {
         fi
 
         # Verify backup integrity on target server
+        log_message "Verifying backup integrity on target server..."
         if [ "$use_password_auth" = true ]; then
             ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
         else
@@ -366,10 +398,12 @@ main() {
         fi
         local exit_status=$?
         if [ $exit_status -ne 0 ]; then
-            log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Skipping migration of domain $DOMAIN."
+            log_message "Backup verification failed on the target server for $TARGET_BACKUP_FILE. Error code: $exit_status"
+            log_message "Skipping migration of domain $DOMAIN."
             migration_status=1
             continue
         fi
+        log_message "Backup verification on target server successful."
 
         # Restore backup on target server
         restore_backup "$TARGET_USER" "$TARGET_SERVER_IP" "$DOMAIN" "$TARGET_PORT" "$TARGET_BACKUP_FILE" "$IGNORE_SIGN" || { log_message "Failed to restore backup of domain $DOMAIN on the target server"; migration_status=1; continue; }
@@ -377,6 +411,7 @@ main() {
         log_message "Migration of domain $DOMAIN completed successfully."
 
         # Prompt user to clean up backup files
+        echo  # Add an extra newline for spacing
         read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
         CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
 
@@ -401,6 +436,10 @@ main() {
         else
             log_message "Backup files for domain $DOMAIN have not been cleaned up."
         fi
+
+        echo  # Add an extra newline for spacing
+        log_message "Migration process for domain $DOMAIN completed."
+        echo  # Add an extra newline for spacing
     done
 
     # Display overall migration status
@@ -412,6 +451,7 @@ main() {
 
     # Prompt user to erase SSH keys
     if [ "$use_password_auth" = false ]; then
+        echo  # Add an extra newline for spacing
         read -p "Do you want to erase the generated SSH keys? (yes/no) [yes]: " ERASE_KEYS
         ERASE_KEYS=${ERASE_KEYS:-yes}
 
