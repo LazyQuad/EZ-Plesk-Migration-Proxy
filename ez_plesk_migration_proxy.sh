@@ -377,9 +377,9 @@ main() {
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" 2>&1)
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf '$BACKUP_FILE'" 2>&1)
         else
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" 2>&1)
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf '$BACKUP_FILE'" 2>&1)
         fi
         exit_status=$?
         if [ $exit_status -ne 0 ]; then
@@ -397,20 +397,21 @@ main() {
             log_message "Backup verification successful."
         fi
 
-        log_message "Transferring backup to target server. Please wait..."
-
-        # Check if the backup file exists on the source server
+        # Check if the backup file exists and is readable
+        log_message "Checking if backup file exists and is readable..."
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls $BACKUP_FILE" > /dev/null 2>&1
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls $BACKUP_FILE" > /dev/null 2>&1
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
         fi
-
-        if [ $? -ne 0 ]; then
-            log_message "Backup file $BACKUP_FILE not found on the source server. Skipping migration of domain $DOMAIN."
+        if [[ $FILE_CHECK == *"No such file or directory"* ]] || [[ $FILE_CHECK == *"Permission denied"* ]]; then
+            log_message "Error accessing backup file: $FILE_CHECK"
+            log_message "Skipping migration of domain $DOMAIN due to backup file access issues."
             migration_status=1
             continue
         fi
+
+        log_message "Transferring backup to target server. Please wait..."
 
         # Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
