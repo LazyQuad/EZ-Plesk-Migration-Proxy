@@ -377,13 +377,14 @@ main() {
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" > /dev/null 2>&1 || echo "Tar command failed with exit code $?"
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" 2>&1)
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" 2>&1)
         fi
-        local exit_status=$?
+        exit_status=$?
         if [ $exit_status -ne 0 ]; then
             log_message "Backup verification failed on the source server for $BACKUP_FILE. Error code: $exit_status"
+            log_message "Error output: $VERIFY_OUTPUT"
             read -p "Do you want to continue with the migration despite the verification failure? (yes/no): " CONTINUE_ANYWAY
             if [ "$CONTINUE_ANYWAY" != "yes" ]; then
                 log_message "Skipping migration of domain $DOMAIN due to verification failure."
@@ -398,14 +399,35 @@ main() {
 
         log_message "Transferring backup to target server. Please wait..."
 
+        # Check if the backup file exists on the source server
+        if [ "$use_password_auth" = true ]; then
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls $BACKUP_FILE" > /dev/null 2>&1
+        else
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls $BACKUP_FILE" > /dev/null 2>&1
+        fi
+
+        if [ $? -ne 0 ]; then
+            log_message "Backup file $BACKUP_FILE not found on the source server. Skipping migration of domain $DOMAIN."
+            migration_status=1
+            continue
+        fi
+
         # Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
         log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
         if [ "$use_password_auth" = true ]; then
-            scp -P "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server"; migration_status=1; continue; }
+            scp -P "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE"
         else
-            scp -P "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server"; migration_status=1; continue; }
+            scp -P "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE"
         fi
+
+        if [ $? -ne 0 ]; then
+            log_message "Failed to transfer backup of domain $DOMAIN to the target server"
+            migration_status=1
+            continue
+        fi
+
+        log_message "Backup transfer completed successfully."
 
         # Verify backup integrity on target server
         log_message "Verifying backup integrity on target server..."
