@@ -348,13 +348,23 @@ main() {
         fi
 
         echo  # Add an extra newline for spacing
-        read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
+        if [ -n "$SOURCE_SERVER_DOMAIN" ] && [ -n "$TARGET_SERVER_DOMAIN" ]; then
+            read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
+        elif [ -n "$SOURCE_SERVER_DOMAIN" ]; then
+            read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_IP? (yes/no): " CONFIRM
+        elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
+            read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
+        else
+            read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
+        fi
         echo  # Add an extra newline for spacing
-        
+
         if [ "$CONFIRM" != "yes" ]; then
             log_message "Migration of domain $DOMAIN aborted by the user."
             continue
         fi
+
+        log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
@@ -365,20 +375,28 @@ main() {
         fi
 
         # Verify backup integrity on source server
-        log_message "Verifying backup integrity on source server..."
+        log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "/bin/tar -tvf $BACKUP_FILE" > /dev/null 2>&1 || echo "Tar command failed with exit code $?"
         else
             ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf $BACKUP_FILE" > /dev/null 2>&1
         fi
         local exit_status=$?
         if [ $exit_status -ne 0 ]; then
             log_message "Backup verification failed on the source server for $BACKUP_FILE. Error code: $exit_status"
-            log_message "Skipping migration of domain $DOMAIN."
-            migration_status=1
-            continue
+            read -p "Do you want to continue with the migration despite the verification failure? (yes/no): " CONTINUE_ANYWAY
+            if [ "$CONTINUE_ANYWAY" != "yes" ]; then
+                log_message "Skipping migration of domain $DOMAIN due to verification failure."
+                migration_status=1
+                continue
+            else
+                log_message "Continuing with migration despite verification failure."
+            fi
+        else
+            log_message "Backup verification successful."
         fi
-        log_message "Backup verification successful."
+
+        log_message "Transferring backup to target server. Please wait..."
 
         # Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
