@@ -125,20 +125,33 @@ backup_source() {
     local backup_file="/var/lib/psa/dumps/${domain}-backup.tar"
     log_message "Backing up domain $domain on the source server to $backup_file..."
     
-    local backup_command="plesk bin pleskbackup --domains-name $domain --output-file $backup_file"
-    local backup_output
+    local backup_command="plesk bin pleskbackup --domains-name '$domain' --output-file '$backup_file'"
+    local ssh_command
+    
     if [ "$use_password_auth" = true ]; then
-        backup_output=$(ssh -p "$port" "$user@$server_ip" "$backup_command" 2>&1)
+        ssh_command="ssh -p $port $user@$server_ip"
     else
-        backup_output=$(ssh -p "$port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "$backup_command" 2>&1)
+        ssh_command="ssh -p $port -i '$script_dir/keys/$server_ip-$user' $user@$server_ip"
     fi
     
-    if [ $? -ne 0 ]; then
-        log_message "Failed to backup domain $domain on the source server. Error output: $backup_output"
+    local full_command="$ssh_command \"$backup_command && echo 'BACKUP_SUCCESS' || echo 'BACKUP_FAILED'\""
+    log_message "Executing command: $full_command"
+    
+    local backup_output
+    backup_output=$(eval "$full_command")
+    local ssh_exit_status=$?
+    
+    log_message "SSH command exit status: $ssh_exit_status"
+    log_message "Backup command output: $backup_output"
+    
+    if [[ $backup_output == *"BACKUP_SUCCESS"* ]]; then
+        log_message "Backup created successfully"
+        echo "$backup_file"
+        return 0
+    else
+        log_message "Failed to create backup. Error output: $backup_output"
         return 1
     fi
-    
-    echo "$backup_file"  # Return the backup file path
 }
 
 # Function to restore backup on target server
@@ -352,7 +365,7 @@ main() {
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
         elif [ -n "$SOURCE_SERVER_DOMAIN" ]; then
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_IP? (yes/no): " CONFIRM
-elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
+        elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
         else
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
@@ -375,21 +388,16 @@ elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
             continue
         fi
 
-        # Check if backup file was created
-        log_message "Checking if backup file was created..."
+        log_message "Backup file path: $BACKUP_FILE"
+
+        # Verify the backup file exists
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f \"$BACKUP_FILE\""
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" || { log_message "Backup file not found on source server"; migration_status=1; continue; }
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f \"$BACKUP_FILE\""
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" || { log_message "Backup file not found on source server"; migration_status=1; continue; }
         fi
 
-        if [ $? -ne 0 ]; then
-            log_message "Backup file was not created: $BACKUP_FILE"
-            log_message "Skipping migration of domain $DOMAIN due to backup creation failure."
-            migration_status=1
-            continue
-        fi
-
+        log_message "Backup file verified on source server"
         log_message "Backup file created successfully: $BACKUP_FILE"
 
         # Verify backup integrity on source server
