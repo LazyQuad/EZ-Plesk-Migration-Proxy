@@ -1,4 +1,5 @@
 #!/bin/bash
+clear
 
 # Set up error handling
 set -o errexit  # Exit on error
