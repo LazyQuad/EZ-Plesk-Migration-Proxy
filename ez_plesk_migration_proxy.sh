@@ -6,13 +6,13 @@ set +e  # Don't exit on error
 set +o pipefail # Don't exit if any command in a pipeline fails
 
 # Script version
-VERSION="1.2.3"
+VERSION="1.2.4"
 
 # Get the script's directory
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Create necessary directories
-mkdir -p "$script_dir/keys" "$script_dir/backups" "$script_dir/logs" || { echo "Failed to create required directories"; }
+mkdir -p "$script_dir/keys" "$script_dir/backups" "$script_dir/logs" || { echo "Failed to create required directories"; exit 1; }
 
 # Generate unique log file name
 SCRIPT_LOG="$script_dir/logs/migration_script_$(date +'%Y%m%d_%H%M%S').log"
@@ -135,29 +135,18 @@ backup_source() {
     fi
     
     local full_command="$ssh_command \"$backup_command && echo 'BACKUP_SUCCESS' || echo 'BACKUP_FAILED'\""
-    log_message "Executing command: $full_command"
     
     local backup_output
     backup_output=$(eval "$full_command")
     local ssh_exit_status=$?
     
-    log_message "SSH command exit status: $ssh_exit_status"
-    log_message "Backup command output: $backup_output"
-    
     if [[ $backup_output == *"BACKUP_SUCCESS"* ]]; then
         log_message "Backup created successfully"
-        echo "$backup_file"
+        echo "SUCCESS:$backup_file"
         return 0
     else
         log_message "Failed to create backup. Error output: $backup_output"
-        return 1
-    fi
-    if [[ $backup_output == *"BACKUP_SUCCESS"* ]]; then
-        log_message "Backup created successfully"
-        echo "$backup_file"
-        return 0
-    else
-        log_message "Failed to create backup. Error output: $backup_output"
+        echo "FAILED:"
         return 1
     fi
 }
@@ -185,11 +174,9 @@ extract_ip() {
     local server_input=$1
     local server_type=$2  # "source" or "target"
     
-    # Check if the input is a valid IP address
     if [[ $server_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "$server_input"
     else
-        # Extract the IP address using dig
         local ip=$(dig +short "$server_input" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
         if [[ -n $ip ]]; then
             echo "$ip:$server_input"
@@ -230,7 +217,7 @@ get_auth_method() {
     echo "2. More Secure - SSH key-based authentication"
     echo 
     read -p "Enter the number corresponding to your preferred authentication method: " auth_choice
-    echo  # Add an extra newline here
+    echo
 
     case $auth_choice in
         1)
@@ -246,7 +233,7 @@ get_auth_method() {
             use_password_auth=true
             ;;
     esac
-    echo  # Add an extra newline here
+    echo
 }
 
 # Main script execution
@@ -255,7 +242,6 @@ main() {
 
     check_requirements || { log_message "Missing required commands. Proceeding with caution."; }
 
-    # Prompt user for source and target server details
     echo -e "\n-------------------------------------------------------"
     echo "Welcome to the EZ Plesk Migration Proxy Script v$VERSION"
     echo -e "-------------------------------------------------------\n"
@@ -296,7 +282,6 @@ main() {
         log_message "Target Server IP: $TARGET_SERVER_IP"
     fi
 
-    # Check Plesk version on source and target servers
     SOURCE_PLESK_VERSION=$(check_plesk_version "$SOURCE_USER" "$SOURCE_SERVER_IP" "$SOURCE_PORT")
     TARGET_PLESK_VERSION=$(check_plesk_version "$TARGET_USER" "$TARGET_SERVER_IP" "$TARGET_PORT")
 
@@ -313,11 +298,9 @@ main() {
 
     clear
 
-    # Prompt user to choose the authentication method
     get_auth_method
 
     if [ "$use_password_auth" = true ]; then
-        # Prompt for passwords
         if [ -n "$SOURCE_SERVER_DOMAIN" ]; then
             read -s -p "Enter the password for the source server [$SOURCE_SERVER_DOMAIN]: " SOURCE_PASSWORD
         else
@@ -330,36 +313,26 @@ main() {
             read -s -p "Enter the password for the target server [$TARGET_SERVER_IP]: " TARGET_PASSWORD
         fi
         echo
-        echo  # Add an extra newline here
+        echo
     else
-        # Generate SSH key pair for source server
         generate_ssh_keys "$SOURCE_SERVER_IP" "$SOURCE_USER" || migration_status=1
-
-        # Generate SSH key pair for target server
         generate_ssh_keys "$TARGET_SERVER_IP" "$TARGET_USER" || migration_status=1
-
-        # Copy public SSH key to source server
         copy_ssh_key "$SOURCE_USER" "$SOURCE_SERVER_IP" "$SOURCE_PORT" || migration_status=1
-
-        # Copy public SSH key to target server
         copy_ssh_key "$TARGET_USER" "$TARGET_SERVER_IP" "$TARGET_PORT" || migration_status=1
     fi
 
-    # Loop to transfer multiple domains
     while true; do
-        echo  # Add an extra newline for spacing
+        echo
         DOMAIN=$(prompt_input "Enter the domain to migrate (or press Enter to finish)")
         if [ -z "$DOMAIN" ]; then
             break
         fi
-        echo  # Add an extra newline for spacing
+        echo
 
         log_message "Starting migration process for domain: $DOMAIN"
         
-        # Update the migration log file name for the current domain
         MIGRATION_LOG="$script_dir/logs/migration_${DOMAIN}_$(date +'%Y%m%d_%H%M%S').log"
 
-        # Check if domain exists on target server
         if check_domain_exists "$TARGET_USER" "$TARGET_SERVER_IP" "$DOMAIN" "$TARGET_PORT"; then
             echo -e "\nDomain $DOMAIN already exists on the target server."
             BACKUP_DOMAIN=$(prompt_input "Do you want to backup the existing domain? (yes/no)" "no")
@@ -368,7 +341,7 @@ main() {
             fi
         fi
 
-        echo  # Add an extra newline for spacing
+        echo
         if [ -n "$SOURCE_SERVER_DOMAIN" ] && [ -n "$TARGET_SERVER_DOMAIN" ]; then
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
         elif [ -n "$SOURCE_SERVER_DOMAIN" ]; then
@@ -378,21 +351,21 @@ main() {
         else
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
         fi
-        echo  # Add an extra newline for spacing
+        echo
 
         if [ "$CONFIRM" != "yes" ]; then
             log_message "Migration of domain $DOMAIN aborted by the user."
             continue
         fi
 
-        #BACKUP ON SOURCE
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
 
-        # Backup domain on source server
-        BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
+        BACKUP_RESULT=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
         BACKUP_STATUS=$?
 
-        if [ $BACKUP_STATUS -ne 0 ]; then
+        IFS=':' read -r BACKUP_STATUS_TEXT BACKUP_FILE <<< "$BACKUP_RESULT"
+
+        if [ "$BACKUP_STATUS_TEXT" != "SUCCESS" ]; then
             log_message "Failed to create backup for domain $DOMAIN. Skipping migration."
             migration_status=1
             continue
@@ -400,7 +373,6 @@ main() {
 
         log_message "Backup file path: $BACKUP_FILE"
 
-        # Verify the backup file exists
         if [ "$use_password_auth" = true ]; then
             ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" 
             FILE_EXISTS=$?
@@ -416,17 +388,13 @@ main() {
         fi
 
         log_message "Backup file verified on source server: $BACKUP_FILE"
-        log_message "Debug: BACKUP_FILE content: '$BACKUP_FILE'"
-        log_message "Debug: BACKUP_STATUS: $BACKUP_STATUS"
 
-        # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
             ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tf \"$BACKUP_FILE\"" > /dev/null 2>&1
         else
             ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tf \"$BACKUP_FILE\"" > /dev/null 2>&1
         fi
-        log_message "Debug: FILE_EXISTS status: $FILE_EXISTS"
         
         if [ $? -ne 0 ]; then
             log_message "Backup verification failed on the source server for $BACKUP_FILE."
@@ -443,7 +411,6 @@ main() {
         fi
         log_message "Transferring backup to target server. Please wait..."
 
-        # Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
         log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
         if [ "$use_password_auth" = true ]; then
@@ -460,7 +427,6 @@ main() {
 
         log_message "Backup transfer completed successfully."
 
-        # Verify backup integrity on target server
         log_message "Verifying backup integrity on target server..."
         if [ "$use_password_auth" = true ]; then
             ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf \"$TARGET_BACKUP_FILE\"" > /dev/null 2>&1
@@ -476,18 +442,15 @@ main() {
         fi
         log_message "Backup verification on target server successful."
 
-        # Restore backup on target server
         restore_backup "$TARGET_USER" "$TARGET_SERVER_IP" "$DOMAIN" "$TARGET_PORT" "$TARGET_BACKUP_FILE" "$IGNORE_SIGN" || { log_message "Failed to restore backup of domain $DOMAIN on the target server"; migration_status=1; continue; }
 
         log_message "Migration of domain $DOMAIN completed successfully."
 
-        # Prompt user to clean up backup files
-        echo  # Add an extra newline for spacing
+        echo
         read -p "Do you want to clean up the backup files for domain $DOMAIN? (yes/no) [yes]: " CLEANUP_BACKUPS
         CLEANUP_BACKUPS=${CLEANUP_BACKUPS:-yes}
 
         if [ "$CLEANUP_BACKUPS" == "yes" ]; then
-            # Clean up backup files on source server
             log_message "Cleaning up backup files for domain $DOMAIN on the source server..."
             if [ "$use_password_auth" = true ]; then
                 ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f \"$BACKUP_FILE\""
@@ -495,7 +458,6 @@ main() {
                 ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f \"$BACKUP_FILE\""
             fi
 
-            # Clean up backup files on target server
             log_message "Cleaning up backup files for domain $DOMAIN on the target server..."
             if [ "$use_password_auth" = true ]; then
                 ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f \"$TARGET_BACKUP_FILE\""
@@ -508,26 +470,23 @@ main() {
             log_message "Backup files for domain $DOMAIN have not been cleaned up."
         fi
 
-        echo  # Add an extra newline for spacing
+        echo
         log_message "Migration process for domain $DOMAIN completed."
-        echo  # Add an extra newline for spacing
+        echo
     done
 
-    # Display overall migration status
     if [ $migration_status -eq 0 ]; then
         log_message "All domain migrations completed successfully."
     else
         log_message "One or more domain migrations encountered errors. Please check the logs for more details."
     fi
 
-    # Prompt user to erase SSH keys
     if [ "$use_password_auth" = false ]; then
-        echo  # Add an extra newline for spacing
+        echo
         read -p "Do you want to erase the generated SSH keys? (yes/no) [yes]: " ERASE_KEYS
         ERASE_KEYS=${ERASE_KEYS:-yes}
 
         if [ "$ERASE_KEYS" == "yes" ]; then
-            # Erase SSH key files
             log_message "Erasing SSH key files..."
             rm -f "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER.pub"
             rm -f "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER" "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER.pub"
@@ -544,5 +503,4 @@ main() {
 # Run the main function
 main
 
-# This line will always be reached
 echo -e "\nScript execution completed. Check the log for details."
