@@ -126,18 +126,19 @@ backup_source() {
     log_message "Backing up domain $domain on the source server to $backup_file..."
     
     local backup_command="plesk bin pleskbackup --domains-name $domain --output-file $backup_file"
+    local backup_output
     if [ "$use_password_auth" = true ]; then
-        ssh -p "$port" "$user@$server_ip" "$backup_command" 2>&1 || { 
-            log_message "Failed to backup domain $domain on the source server. Error: $?"
-            return 1
-        }
+        backup_output=$(ssh -p "$port" "$user@$server_ip" "$backup_command" 2>&1)
     else
-        ssh -p "$port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "$backup_command" 2>&1 || { 
-            log_message "Failed to backup domain $domain on the source server. Error: $?"
-            return 1
-        }
+        backup_output=$(ssh -p "$port" -i "$script_dir/keys/$server_ip-$user" "$user@$server_ip" "$backup_command" 2>&1)
     fi
     
+    if [ $? -ne 0 ]; then
+        log_message "Failed to backup domain $domain on the source server. Error output: $backup_output"
+        return 1
+    fi
+    
+    log_message "Backup command output: $backup_output"
     echo "$backup_file"  # Return the backup file path
 }
 
@@ -371,7 +372,15 @@ main() {
             ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
         fi
 
+        #Starting backup process
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
+
+        # Check available space and list contents of dumps directory
+        if [ "$use_password_auth" = true ]; then
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+        else
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+        fi
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
@@ -380,6 +389,23 @@ main() {
             migration_status=1
             continue
         fi
+
+        # Check if backup file was created
+        log_message "Checking if backup file was created..."
+        if [ "$use_password_auth" = true ]; then
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
+        else
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
+        fi
+
+        if [[ $FILE_CHECK == *"No such file or directory"* ]]; then
+            log_message "Backup file was not created: $FILE_CHECK"
+            log_message "Skipping migration of domain $DOMAIN due to backup creation failure."
+            migration_status=1
+            continue
+        fi
+
+        log_message "Backup file details: $FILE_CHECK"
 
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
