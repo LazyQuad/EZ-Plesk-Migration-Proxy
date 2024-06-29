@@ -39,7 +39,7 @@ main() {
     if ! check_ssh_connection "$TARGET_USER@$TARGET_SERVER -p $TARGET_PORT"; then
         log_message "Cannot connect to target server. Please check your credentials and try again."
         exit 1
-    }
+    fi
 
     # Main migration loop
     while true; do
@@ -52,13 +52,13 @@ main() {
         if ! ssh "$SOURCE_USER@$SOURCE_SERVER" -p "$SOURCE_PORT" "plesk bin domain --info $DOMAIN" &>/dev/null; then
             log_message "Domain $DOMAIN does not exist on source server. Skipping."
             continue
-        }
+        fi
 
         # Check if domain exists on target
         if ssh "$TARGET_USER@$TARGET_SERVER" -p "$TARGET_PORT" "plesk bin domain --info $DOMAIN" &>/dev/null; then
             log_message "Domain $DOMAIN already exists on target server. Skipping."
             continue
-        }
+        fi
 
         # Backup domain on source server
         BACKUP_FILE="/tmp/${DOMAIN}_backup.tar"
@@ -91,4 +91,4 @@ main() {
     log_message "Migration process completed. Check the log for details."
 }
 
-main
+main    
