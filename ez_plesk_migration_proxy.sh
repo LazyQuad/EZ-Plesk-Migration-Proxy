@@ -152,6 +152,14 @@ backup_source() {
         log_message "Failed to create backup. Error output: $backup_output"
         return 1
     fi
+    if [[ $backup_output == *"BACKUP_SUCCESS"* ]]; then
+        log_message "Backup created successfully"
+        echo "$backup_file"
+        return 0
+    else
+        log_message "Failed to create backup. Error output: $backup_output"
+        return 1
+    fi
 }
 
 # Function to restore backup on target server
@@ -382,7 +390,9 @@ main() {
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
-        if [ $? -ne 0 ]; then
+        BACKUP_STATUS=$?
+
+        if [ $BACKUP_STATUS -ne 0 ]; then
             log_message "Failed to create backup for domain $DOMAIN. Skipping migration."
             migration_status=1
             continue
@@ -392,13 +402,22 @@ main() {
 
         # Verify the backup file exists
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" || { log_message "Backup file not found on source server"; migration_status=1; continue; }
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" 
+            FILE_EXISTS=$?
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'" || { log_message "Backup file not found on source server"; migration_status=1; continue; }
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "test -f '$BACKUP_FILE'"
+            FILE_EXISTS=$?
         fi
 
-        log_message "Backup file verified on source server"
-        log_message "Backup file created successfully: $BACKUP_FILE"
+        if [ $FILE_EXISTS -ne 0 ]; then
+            log_message "Backup file not found on source server: $BACKUP_FILE"
+            migration_status=1
+            continue
+        fi
+
+        log_message "Backup file verified on source server: $BACKUP_FILE"
+        log_message "Debug: BACKUP_FILE content: '$BACKUP_FILE'"
+        log_message "Debug: BACKUP_STATUS: $BACKUP_STATUS"
 
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
@@ -407,6 +426,7 @@ main() {
         else
             ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tf \"$BACKUP_FILE\"" > /dev/null 2>&1
         fi
+        log_message "Debug: FILE_EXISTS status: $FILE_EXISTS"
         
         if [ $? -ne 0 ]; then
             log_message "Backup verification failed on the source server for $BACKUP_FILE."
@@ -421,7 +441,6 @@ main() {
         else
             log_message "Backup verification successful."
         fi
-
         log_message "Transferring backup to target server. Please wait..."
 
         # Transfer backup from source server to target server
