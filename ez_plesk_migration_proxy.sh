@@ -6,7 +6,7 @@ set +e  # Don't exit on error
 set +o pipefail # Don't exit if any command in a pipeline fails
 
 # Script version
-VERSION="1.2.2"
+VERSION="1.2.3"
 
 # Get the script's directory
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -353,7 +353,7 @@ main() {
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
         elif [ -n "$SOURCE_SERVER_DOMAIN" ]; then
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_DOMAIN ($SOURCE_SERVER_IP) to $TARGET_SERVER_IP? (yes/no): " CONFIRM
-        elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
+elif [ -n "$TARGET_SERVER_DOMAIN" ]; then
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_DOMAIN ($TARGET_SERVER_IP)? (yes/no): " CONFIRM
         else
             read -p "Are you sure you want to proceed with the migration of domain $DOMAIN from $SOURCE_SERVER_IP to $TARGET_SERVER_IP? (yes/no): " CONFIRM
@@ -365,21 +365,14 @@ main() {
             continue
         fi
 
-        #Starting backup process
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
 
         # Check available space and list contents of dumps directory
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/;"
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/;"
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
         fi
-        
-        log_message "Debug: Executing command: ssh -p \"$SOURCE_PORT\" \"$SOURCE_USER@$SOURCE_SERVER_IP\" \"ls -l '$BACKUP_FILE'\""
-        log_message "Debug: BACKUP_FILE=$BACKUP_FILE"
-        log_message "Debug: SOURCE_PORT=$SOURCE_PORT"
-        log_message "Debug: SOURCE_USER=$SOURCE_USER"
-        log_message "Debug: SOURCE_SERVER_IP=$SOURCE_SERVER_IP"
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
@@ -388,6 +381,11 @@ main() {
             migration_status=1
             continue
         fi
+
+        log_message "Debug: BACKUP_FILE=$BACKUP_FILE"
+        log_message "Debug: SOURCE_PORT=$SOURCE_PORT"
+        log_message "Debug: SOURCE_USER=$SOURCE_USER"
+        log_message "Debug: SOURCE_SERVER_IP=$SOURCE_SERVER_IP"
 
         # Check if backup file was created
         log_message "Checking if backup file was created..."
@@ -409,9 +407,9 @@ main() {
         # Verify backup integrity on source server
         log_message "Verifying backup integrity on source server. Please wait..."
         if [ "$use_password_auth" = true ]; then
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf '$BACKUP_FILE'" 2>&1)
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf \"$BACKUP_FILE\"" 2>&1)
         else
-            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf '$BACKUP_FILE'" 2>&1)
+            VERIFY_OUTPUT=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "tar -tvf \"$BACKUP_FILE\"" 2>&1)
         fi
         exit_status=$?
         if [ $exit_status -ne 0 ]; then
@@ -427,20 +425,6 @@ main() {
             fi
         else
             log_message "Backup verification successful."
-        fi
-
-        # Check if the backup file exists and is readable
-        log_message "Checking if backup file exists and is readable..."
-        if [ "$use_password_auth" = true ]; then
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
-        else
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
-        fi
-        if [[ $FILE_CHECK == *"No such file or directory"* ]] || [[ $FILE_CHECK == *"Permission denied"* ]]; then
-            log_message "Error accessing backup file: $FILE_CHECK"
-            log_message "Skipping migration of domain $DOMAIN due to backup file access issues."
-            migration_status=1
-            continue
         fi
 
         log_message "Transferring backup to target server. Please wait..."
@@ -465,9 +449,9 @@ main() {
         # Verify backup integrity on target server
         log_message "Verifying backup integrity on target server..."
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+            ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf \"$TARGET_BACKUP_FILE\"" > /dev/null 2>&1
         else
-            ssh -p "$TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf $TARGET_BACKUP_FILE" > /dev/null 2>&1
+            ssh -p "$TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER_IP" "tar -tvf \"$TARGET_BACKUP_FILE\"" > /dev/null 2>&1
         fi
         local exit_status=$?
         if [ $exit_status -ne 0 ]; then
@@ -492,17 +476,17 @@ main() {
             # Clean up backup files on source server
             log_message "Cleaning up backup files for domain $DOMAIN on the source server..."
             if [ "$use_password_auth" = true ]; then
-                ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f $BACKUP_FILE"
+                ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f \"$BACKUP_FILE\""
             else
-                ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f $BACKUP_FILE"
+                ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f \"$BACKUP_FILE\""
             fi
 
             # Clean up backup files on target server
             log_message "Cleaning up backup files for domain $DOMAIN on the target server..."
             if [ "$use_password_auth" = true ]; then
-                ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f $TARGET_BACKUP_FILE"
+                ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f \"$TARGET_BACKUP_FILE\""
             else
-                ssh -p "$TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f $TARGET_BACKUP_FILE"
+                ssh -p "$TARGET_PORT" -i "$script_dir/keys/$TARGET_SERVER_IP-$TARGET_USER" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f \"$TARGET_BACKUP_FILE\""
             fi
 
             log_message "Backup files for domain $DOMAIN have been cleaned up."
