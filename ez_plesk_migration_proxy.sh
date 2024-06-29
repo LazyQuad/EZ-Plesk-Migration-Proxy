@@ -364,6 +364,13 @@ main() {
             continue
         fi
 
+        # Disk Space Check
+        if [ "$use_password_auth" = true ]; then
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+        else
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+        fi
+
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
 
         # Backup domain on source server
