@@ -2,17 +2,17 @@
 clear
 
 # Set up error handling
-set -o errexit  # Exit on error
-set -o pipefail # Exit if any command in a pipeline fails
+set +e  # Don't exit on error
+set +o pipefail # Don't exit if any command in a pipeline fails
 
 # Script version
-VERSION="1.1.0"
+VERSION="1.2.1"
 
 # Get the script's directory
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Create necessary directories
-mkdir -p "$script_dir/keys" "$script_dir/backups" "$script_dir/logs" || { echo "Failed to create required directories"; exit 1; }
+mkdir -p "$script_dir/keys" "$script_dir/backups" "$script_dir/logs" || { echo "Failed to create required directories"; }
 
 # Generate unique log file name
 SCRIPT_LOG="$script_dir/logs/migration_script_$(date +'%Y%m%d_%H%M%S').log"
@@ -20,16 +20,16 @@ SCRIPT_LOG="$script_dir/logs/migration_script_$(date +'%Y%m%d_%H%M%S').log"
 # Initialize migration status variable
 migration_status=0
 
-# Function to log messages
+# Function to log messages and echo to console
 log_message() {
-    echo "$(date +'%Y-%m-%d %H:%M:%S') - $1" >> "$SCRIPT_LOG"
-    echo "$1"
+    local message="$1"
+    echo -e "\n$(date +'%Y-%m-%d %H:%M:%S') - $message" | tee -a "$SCRIPT_LOG"
 }
 
 # Function to handle errors
 handle_error() {
     log_message "Error on line $1"
-    exit 1
+    # Don't exit, just continue
 }
 
 # Set up trap for error handling
@@ -44,6 +44,7 @@ check_requirements() {
             return 1
         fi
     done
+    log_message "All required commands are available."
 }
 
 # Function to prompt for input with default value
@@ -163,7 +164,7 @@ extract_ip() {
         # Extract the IP address using dig
         local ip=$(dig +short "$server_input" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
         if [[ -n $ip ]]; then
-            echo "$ip"
+            echo "$ip:$server_input"
         else
             log_message "Failed to retrieve a valid IP address for $server_input ($server_type server). Please enter a valid IP address."
             return 1
@@ -195,7 +196,7 @@ backup_existing_domain() {
 
 # Function to display the authentication method menu and get user input
 get_auth_method() {
-    echo "Authentication Methods:"
+    echo -e "\nAuthentication Methods:"
     echo "-----------------------"
     echo "1. Less Secure - Password-based authentication"
     echo "2. More Secure - SSH key-based authentication"
@@ -204,15 +205,15 @@ get_auth_method() {
 
     case $auth_choice in
         1)
-            echo -e "\nYou have chosen password-based authentication.\n"
+            log_message "You have chosen password-based authentication."
             use_password_auth=true
             ;;
         2)
-            echo -e "\nYou have chosen SSH key-based authentication.\n"
+            log_message "You have chosen SSH key-based authentication."
             use_password_auth=false
             ;;
         *)
-            echo -e "\nInvalid choice. Defaulting to password-based authentication.\n"
+            log_message "Invalid choice. Defaulting to password-based authentication."
             use_password_auth=true
             ;;
     esac
@@ -222,16 +223,18 @@ get_auth_method() {
 main() {
     log_message "Starting Plesk migration script v$VERSION"
 
-    check_requirements || { log_message "Missing required commands. Exiting."; return 1; }
+    check_requirements || { log_message "Missing required commands. Proceeding with caution."; }
 
     # Prompt user for source and target server details
+    echo -e "\n-------------------------------------------------------"
     echo "Welcome to the EZ Plesk Migration Proxy Script v$VERSION"
-    echo "-------------------------------------------------------"
+    echo -e "-------------------------------------------------------\n"
 
     while true; do
         SOURCE_SERVER=$(prompt_input "Enter the source server IP or domain")
-        SOURCE_SERVER_IP=$(extract_ip "$SOURCE_SERVER" "source")
+        SOURCE_SERVER_INFO=$(extract_ip "$SOURCE_SERVER" "source")
         if [ $? -eq 0 ]; then
+            IFS=':' read -r SOURCE_SERVER_IP SOURCE_SERVER_DOMAIN <<< "$SOURCE_SERVER_INFO"
             break
         fi
     done
@@ -241,8 +244,9 @@ main() {
 
     while true; do
         TARGET_SERVER=$(prompt_input "Enter the target server IP or domain")
-        TARGET_SERVER_IP=$(extract_ip "$TARGET_SERVER" "target")
+        TARGET_SERVER_INFO=$(extract_ip "$TARGET_SERVER" "target")
         if [ $? -eq 0 ]; then
+            IFS=':' read -r TARGET_SERVER_IP TARGET_SERVER_DOMAIN <<< "$TARGET_SERVER_INFO"
             break
         fi
     done
@@ -250,8 +254,17 @@ main() {
     TARGET_PORT=$(prompt_input "Enter the SSH port for the target server" "22")
     TARGET_USER=$(prompt_input "Enter the username for the target server" "root")
 
-    log_message "Source Server: $SOURCE_SERVER (IP: $SOURCE_SERVER_IP)"
-    log_message "Target Server: $TARGET_SERVER (IP: $TARGET_SERVER_IP)"
+    if [ -n "$SOURCE_SERVER_DOMAIN" ]; then
+        log_message "Source Server: $SOURCE_SERVER_DOMAIN (IP: $SOURCE_SERVER_IP)"
+    else
+        log_message "Source Server IP: $SOURCE_SERVER_IP"
+    fi
+
+    if [ -n "$TARGET_SERVER_DOMAIN" ]; then
+        log_message "Target Server: $TARGET_SERVER_DOMAIN (IP: $TARGET_SERVER_IP)"
+    else
+        log_message "Target Server IP: $TARGET_SERVER_IP"
+    fi
 
     # Check Plesk version on source and target servers
     SOURCE_PLESK_VERSION=$(check_plesk_version "$SOURCE_USER" "$SOURCE_SERVER_IP" "$SOURCE_PORT")
@@ -336,13 +349,13 @@ main() {
             continue
         fi
 
-        # Transfer backup from source server to target server
+# Transfer backup from source server to target server
         TARGET_BACKUP_FILE="/tmp/$DOMAIN-backup.tar"
         log_message "Transferring backup of domain $DOMAIN from $BACKUP_FILE on the source server to $TARGET_BACKUP_FILE on the target server..."
         if [ "$use_password_auth" = true ]; then
             scp -P "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server"; migration_status=1; continue; }
         else
-scp -P "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server"; migration_status=1; continue; }
+            scp -P "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$TARGET_BACKUP_FILE" || { log_message "Failed to transfer backup of domain $DOMAIN to the target server"; migration_status=1; continue; }
         fi
 
         # Verify backup integrity on target server
@@ -420,5 +433,5 @@ scp -P "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOU
 # Run the main function
 main
 
-# This line will only be reached if main() completes without errors
-echo "Script execution completed. Check the log for details."
+# This line will always be reached
+echo -e "\nScript execution completed. Check the log for details."
