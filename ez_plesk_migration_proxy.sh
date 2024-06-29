@@ -365,22 +365,21 @@ main() {
             continue
         fi
 
-        # Disk Space Check
-        if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
-        else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
-        fi
-
         #Starting backup process
         log_message "Starting backup process for domain $DOMAIN. Please wait, this may take a while..."
 
         # Check available space and list contents of dumps directory
         if [ "$use_password_auth" = true ]; then
-            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+            ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/;"
         else
-            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/; ls -l /var/lib/psa/dumps/"
+            ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "df -h /var/lib/psa/dumps/;"
         fi
+        
+        log_message "Debug: Executing command: ssh -p \"$SOURCE_PORT\" \"$SOURCE_USER@$SOURCE_SERVER_IP\" \"ls -l '$BACKUP_FILE'\""
+        log_message "Debug: BACKUP_FILE=$BACKUP_FILE"
+        log_message "Debug: SOURCE_PORT=$SOURCE_PORT"
+        log_message "Debug: SOURCE_USER=$SOURCE_USER"
+        log_message "Debug: SOURCE_SERVER_IP=$SOURCE_SERVER_IP"
 
         # Backup domain on source server
         BACKUP_FILE=$(backup_source "$SOURCE_USER" "$SOURCE_SERVER_IP" "$DOMAIN" "$SOURCE_PORT" "$use_password_auth" "$script_dir")
@@ -393,9 +392,9 @@ main() {
         # Check if backup file was created
         log_message "Checking if backup file was created..."
         if [ "$use_password_auth" = true ]; then
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l \"$BACKUP_FILE\" 2>&1")
         else
-            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l '$BACKUP_FILE' 2>&1")
+            FILE_CHECK=$(ssh -p "$SOURCE_PORT" -i "$script_dir/keys/$SOURCE_SERVER_IP-$SOURCE_USER" "$SOURCE_USER@$SOURCE_SERVER_IP" "ls -l \"$BACKUP_FILE\" 2>&1")
         fi
 
         if [[ $FILE_CHECK == *"No such file or directory"* ]]; then
