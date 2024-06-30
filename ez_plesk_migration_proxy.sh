@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.3.5"
+VERSION="1.4.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/migration_$(date +'%Y%m%d_%H%M%S').log"
 
@@ -16,6 +16,16 @@ prompt_input() {
 prompt_password() {
     read -s -p "$1: " password
     echo "$password"
+}
+
+check_sshpass() {
+    if ! command -v sshpass &> /dev/null; then
+        echo "sshpass is not installed. It's required for this script to function."
+        echo "On Ubuntu/Debian, you can install it with: sudo apt install sshpass"
+        echo "On CentOS/RHEL, you can install it with: sudo yum install sshpass"
+        return 1
+    fi
+    return 0
 }
 
 check_ssh_connection() {
@@ -54,6 +64,11 @@ check_plesk_version() {
 
 main() {
     log_message "Starting Plesk migration script v$VERSION"
+
+    if ! check_sshpass; then
+        log_message "sshpass is required but not installed. Please install it and try again."
+        return 1
+    fi
 
     # Gather server information
     while true; do
