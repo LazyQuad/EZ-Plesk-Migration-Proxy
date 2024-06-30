@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.4.1"
+VERSION="1.4.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/migration_$(date +'%Y%m%d_%H%M%S').log"
 
@@ -60,6 +60,21 @@ check_plesk_version() {
     local password=$4
     log_message "Checking Plesk version on $server_ip..."
     sshpass -p "$password" ssh -p "$port" "$user@$server_ip" "plesk version" 2>/dev/null || echo "Plesk not found"
+}
+
+cleanup_backup() {
+    local user=$1
+    local server_ip=$2
+    local port=$3
+    local password=$4
+    local backup_file=$5
+    log_message "Cleaning up backup file on server $server_ip..."
+    sshpass -p "$password" ssh -p "$port" "$user@$server_ip" "rm -f $backup_file"
+    if [ $? -eq 0 ]; then
+        log_message "Backup file cleaned up successfully on $server_ip"
+    else
+        log_message "Failed to clean up backup file on $server_ip"
+    fi
 }
 
 main() {
@@ -168,6 +183,7 @@ main() {
         log_message "Transferring backup to target server..."
         if ! sshpass -p "$SOURCE_PASSWORD" scp -P "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP:$BACKUP_FILE" "$TARGET_USER@$TARGET_SERVER_IP:$BACKUP_FILE"; then
             log_message "Failed to transfer backup for domain $DOMAIN. Skipping."
+            cleanup_backup "$SOURCE_USER" "$SOURCE_SERVER_IP" "$SOURCE_PORT" "$SOURCE_PASSWORD" "$BACKUP_FILE"
             continue
         fi
 
@@ -184,8 +200,8 @@ main() {
         fi
 
         # Clean up
-        sshpass -p "$SOURCE_PASSWORD" ssh -p "$SOURCE_PORT" "$SOURCE_USER@$SOURCE_SERVER_IP" "rm -f $BACKUP_FILE"
-        sshpass -p "$TARGET_PASSWORD" ssh -p "$TARGET_PORT" "$TARGET_USER@$TARGET_SERVER_IP" "rm -f $BACKUP_FILE"
+        cleanup_backup "$SOURCE_USER" "$SOURCE_SERVER_IP" "$SOURCE_PORT" "$SOURCE_PASSWORD" "$BACKUP_FILE"
+        cleanup_backup "$TARGET_USER" "$TARGET_SERVER_IP" "$TARGET_PORT" "$TARGET_PASSWORD" "$BACKUP_FILE"
     done
 
     log_message "Migration process completed. Check the log for details."
